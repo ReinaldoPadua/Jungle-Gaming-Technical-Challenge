@@ -109,7 +109,7 @@ Portas (interfaces em `application/ports`): `WalletRepository`, `WagerTransactio
 - `CHECK (kind NOT IN ('REFUND','ROLLBACK') OR reference_external_transaction_id IS NOT NULL)`
 - `CHECK ((status = 'REJECTED' OR status = 'FAILED') = (failure_code IS NOT NULL))`
 - `CHECK (status <> 'PROCESSED' OR processed_at IS NOT NULL)`
-- **Reversão única**: `CREATE UNIQUE INDEX ux_single_reversal ON wager_transactions (reference_transaction_id, kind) WHERE status = 'PROCESSED' AND kind IN ('REFUND','ROLLBACK');`
+- **Reversão única** (decidido na fase 1: uma transação só é revertida uma vez, por qualquer tipo): `CREATE UNIQUE INDEX ux_single_reversal ON wager_transactions (reference_transaction_id) WHERE status = 'PROCESSED' AND kind IN ('REFUND','ROLLBACK');`
 - Trigger `trg_wager_tx_terminal_guard` (BEFORE UPDATE): bloqueia mudança se `OLD.status` ∈ terminais; bloqueia alteração de campos imutáveis (kind, amount, payload_hash…).
 - Índice parcial para o worker: `(next_attempt_at) WHERE status = 'PENDING_REFERENCE'`.
 - Índice `(provider_id, reference_external_transaction_id)` para achar dependentes.
