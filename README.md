@@ -4,7 +4,7 @@ Serviço financeiro distribuído que processa transações de apostas (BET / WIN
 vindas de múltiplos provedores, via HTTP e SQS, com idempotência persistente, ledger imutável e
 transactional outbox.
 
-> Status: **fases 0–3** (fundação, domínio, schema, API de wallet). Veja o plano completo em [`docs/PLAN.md`](docs/PLAN.md).
+> Status: **fases 0–4** (fundação, domínio, schema, API de wallet, processamento de transações). Veja o plano completo em [`docs/PLAN.md`](docs/PLAN.md).
 > Decisões técnicas serão consolidadas em `ARCHITECTURE.md`.
 
 ## Stack
@@ -49,7 +49,7 @@ Os testes usam **PostgreSQL e LocalStack reais**: banco `wagering_test` e filas 
 (criados automaticamente pelo compose). As variáveis vêm de `.env.test`, que o Bun carrega sozinho
 em `bun test`. O preload `test/setup.ts` recusa rodar se `DATABASE_URL` não apontar para um banco `*_test`.
 
-## API (até a fase 3)
+## API
 
 ```bash
 # criar wallet (saldo inicial gera transação OPENING + lançamento no ledger)
@@ -60,7 +60,20 @@ curl -s localhost:3000/wallets/<walletId>
 curl -s 'localhost:3000/wallets/<walletId>/ledger?limit=50'           # próxima página: &cursor=<nextCursor>
 curl -s -X POST localhost:3000/wallets/<walletId>/reconciliation
 curl -s localhost:3000/metrics
+
+# submeter transação (Idempotency-Key obrigatório)
+curl -s -X POST localhost:3000/wagering/transactions -H 'content-type: application/json' \
+  -H 'Idempotency-Key: provider-a:transaction-123' \
+  -d '{"providerId":"provider-a","externalTransactionId":"transaction-123","playerId":"<playerId>",
+       "walletId":"<walletId>","roundId":"round-987","gameId":"fortune-chimp","kind":"BET",
+       "money":{"amount":"25.00","currency":"BRL"}}'
+
+curl -s localhost:3000/wagering/transactions/<transactionId>
+curl -s localhost:3000/providers/provider-a/wagering/transactions/transaction-123
 ```
+
+Status de `POST /wagering/transactions`: 201 aplicada · 200 replay · 202 aguardando referência ·
+422 rejeitada (com `failureCode`) · 400 inválida · 409 conflito de idempotência · 503 transitório.
 
 Erros seguem sempre `{"error":{"code","message","details?"}}` — ver `ARCHITECTURE.md` §3.
 

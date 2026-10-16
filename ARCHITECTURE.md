@@ -187,3 +187,74 @@ corrigido**. Como o schema impede divergência, o teste a simula desligando os t
 | 500 | bug — sem detalhes internos na resposta, logado com stack |
 
 `amount` numérico no JSON é rejeitado já no schema zod (`must be a decimal string, not a number`).
+
+## 4. Processamento de transações (fase 4)
+
+`ProcessWagerTransactionUseCase` é o **único** caminho de entrada para HTTP e SQS (fase 6).
+Uma transação SQL, nesta ordem:
+
+```
+1. INSERT … ON CONFLICT DO NOTHING (status PENDING)      ← idempotência decidida pelo banco
+     └ conflito → SELECT por idempotency_key
+          ├ mesmo payloadHash → replay (resultado original, idempotentReplay=true)
+          ├ hash diferente   → 409 IDEMPOTENCY_KEY_PAYLOAD_MISMATCH
+          └ achou só por (provider, externalId) → 409 EXTERNAL_TRANSACTION_ID_CONFLICT
+2. SELECT wallet … FOR UPDATE                             ← lock por wallet
+3. referência por (providerId, referenceExternalTransactionId) + reversões já aplicadas
+4. settle()                                               ← regras puras do domínio
+5. UPDATE tx · UPDATE wallet · INSERT ledger · INSERT outbox
+6. wakeDependents (UPDATE … SKIP LOCKED)                  ← antecipa PENDING_REFERENCE
+COMMIT → resposta HTTP / ack SQS
+```
+
+### Estratégia de concorrência — por que lock pessimista
+- **Unidade de concorrência = wallet.** `SELECT … FOR UPDATE` na linha da wallet serializa
+  apenas as operações daquela wallet; wallets diferentes rodam em paralelo (sem lock global).
+- **Por que não optimistic locking?** Num hot wallet (o cenário de 50 requisições simultâneas),
+  optimistic gera uma tempestade de conflitos/retries e latência imprevisível; o lock
+  pessimista enfileira no banco e cada requisição é decidida uma única vez. O custo é o
+  throughput por wallet ser limitado pela duração da transação — aceitável porque a transação é
+  curta (só índices) e protegida por `lock_timeout` (2 s) e `statement_timeout` (5 s).
+- **`version` continua existindo** como contrato do domínio e como verificação no banco
+  (trigger exige +1 a cada mudança de saldo), mas não é o mecanismo de concorrência.
+- **Sem deadlock por construção**: ordem fixa de locks — linha da transação (INSERT) →
+  wallet. Duas requisições com a mesma chave: a segunda bloqueia no INSERT esperando a
+  primeira (que não espera por ela) e, após o COMMIT dela, cai no ramo de replay.
+  O `wakeDependents` usa `SKIP LOCKED` para nunca esperar por linhas que o worker de pendentes
+  segura enquanto pede o lock da wallet. Se ainda assim ocorrer deadlock/lock timeout, o
+  UnitOfWork re-tenta (até 3×).
+- **O banco é a garantia final**: mesmo com um bug no use case, `CHECK (balance >= 0)`, a cadeia
+  do ledger e os constraint triggers diferidos impedem saldo negativo, débito duplicado e
+  divergência saldo ↔ ledger (fase 2). Ordenação/dedup do SQS FIFO serão só otimização.
+
+### Replays
+- A resposta de um replay é reconstruída da linha persistida: `status`, `failureCode` e
+  `resultBalance` (o saldo observado na decisão — não o saldo atual).
+- Uma transação `PENDING_REFERENCE` em replay continua 202; depois que o worker a aplicar, o
+  replay passa a refletir o estado terminal (o resultado evolui; o efeito nunca se repete).
+- Replays não geram eventos na outbox nem métricas de decisão (`idempotent_replays_total`).
+
+### HTTP — `POST /wagering/transactions`
+| Status | Significado | O provedor deve |
+|---|---|---|
+| 201 | `PROCESSED` agora | — |
+| 200 | `PROCESSED` antes (replay) | — |
+| 202 | `PENDING_REFERENCE` — aceita, aguardando a referência | consultar depois (GET) |
+| 422 | `REJECTED` (novo ou replay); `failureCode` no corpo | ver `providerAction` do código |
+| 400 | payload/header inválido (inclui `Idempotency-Key` ausente, `OPENING`, `amount` numérico) | corrigir |
+| 409 | conflito de idempotência | não reenviar com esta chave |
+| 503 | transitório (`Retry-After`) | reenviar a MESMA requisição |
+
+`WALLET_NOT_FOUND`, `WALLET_PLAYER_MISMATCH` e `CURRENCY_MISMATCH` são 422 (regra de negócio
+sobre estado), não 400: a transação é persistida como `REJECTED` e fica auditável.
+
+### Testes de concorrência (`test/concurrency`) — paralelismo real
+- mesma BET 50× em paralelo → 1×201 + 49×200, um único DEBIT;
+- 100.00 com duas BET de 80.00 simultâneas, repetido 20× → sempre 201 + 422, saldo 20.00,
+  um DEBIT; o 422 reporta o saldo 20.00 que viu após esperar o lock;
+- hot wallet com 120 operações mistas: saldo final conferido em centavos inteiros (BigInt);
+- 20 wallets × 10 apostas em paralelo;
+- **3 processos independentes** (`Bun.spawn`, pools separados): mesma aposta enviada às 3
+  instâncias; 30 apostas disputando 100.00 → exatamente 10 aplicadas; replays cruzados em
+  5 wallets — cada transação decidida exatamente uma vez.
+- `afterEach` de todas as suítes: `wallet.balance == Σ ledger` e nenhum `balance_after < 0`.
