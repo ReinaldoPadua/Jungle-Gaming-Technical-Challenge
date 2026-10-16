@@ -9,6 +9,8 @@ const EnvSchema = z.object({
 
   DATABASE_URL: z.string().url(),
   DB_POOL_MAX: z.coerce.number().int().positive().default(10),
+  DB_LOCK_TIMEOUT_MS: z.coerce.number().int().positive().default(2_000),
+  DB_STATEMENT_TIMEOUT_MS: z.coerce.number().int().positive().default(5_000),
 
   AWS_REGION: z.string().min(1).default('us-east-1'),
   AWS_ACCESS_KEY_ID: z.string().min(1).default('test'),

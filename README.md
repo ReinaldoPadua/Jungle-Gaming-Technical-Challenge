@@ -4,7 +4,7 @@ Serviço financeiro distribuído que processa transações de apostas (BET / WIN
 vindas de múltiplos provedores, via HTTP e SQS, com idempotência persistente, ledger imutável e
 transactional outbox.
 
-> Status: **fase 0 (fundação)**. Veja o plano completo em [`docs/PLAN.md`](docs/PLAN.md).
+> Status: **fases 0–3** (fundação, domínio, schema, API de wallet). Veja o plano completo em [`docs/PLAN.md`](docs/PLAN.md).
 > Decisões técnicas serão consolidadas em `ARCHITECTURE.md`.
 
 ## Stack
@@ -48,6 +48,21 @@ docker compose --profile app up --build --scale app=3
 Os testes usam **PostgreSQL e LocalStack reais**: banco `wagering_test` e filas `*-test.fifo`
 (criados automaticamente pelo compose). As variáveis vêm de `.env.test`, que o Bun carrega sozinho
 em `bun test`. O preload `test/setup.ts` recusa rodar se `DATABASE_URL` não apontar para um banco `*_test`.
+
+## API (até a fase 3)
+
+```bash
+# criar wallet (saldo inicial gera transação OPENING + lançamento no ledger)
+curl -s -X POST localhost:3000/wallets -H 'content-type: application/json' \
+  -d '{"playerId":"0192f28f-5dc0-7d58-bdb2-814ad6a0f4a1","initialBalance":{"amount":"1000.00","currency":"BRL"}}'
+
+curl -s localhost:3000/wallets/<walletId>
+curl -s 'localhost:3000/wallets/<walletId>/ledger?limit=50'           # próxima página: &cursor=<nextCursor>
+curl -s -X POST localhost:3000/wallets/<walletId>/reconciliation
+curl -s localhost:3000/metrics
+```
+
+Erros seguem sempre `{"error":{"code","message","details?"}}` — ver `ARCHITECTURE.md` §3.
 
 ## Filas
 

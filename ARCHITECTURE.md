@@ -133,3 +133,57 @@ Decisões:
   no banco; CHECKs, índices parciais e triggers não são modelados no metadata do ORM.
 - Sem relações declaradas entre os `EntitySchema`, a ordem de INSERT é controlada com `flush()`
   explícito (transação → wallet → ledger). O use case da fase 4 encapsula isso.
+
+## 3. API de wallet (fase 3)
+
+### Camadas
+```
+interface/http (controllers, zod, filtro de erros)
+   └─► application (use cases puros + portas: UnitOfWork, repositórios, Clock, IdGenerator, Metrics, Logger)
+          └─► domain
+infrastructure (MikroORM: UnitOfWork + repositórios, Prometheus, SQS) implementa as portas
+```
+Use cases não têm decorators do Nest: os módulos só fazem composição via `useFactory`.
+
+### UnitOfWork
+- `uow.run(work)` = um `EntityManager` novo (fork limpo) + **uma** transação SQL; os
+  repositórios entregues a `work` estão presos a ela. Cada escrita faz `flush` imediato, então a
+  ordem dos comandos SQL é a ordem das chamadas (FKs compostas/triggers), e o COMMIT é único.
+- `SET LOCAL lock_timeout` (2 s) e `statement_timeout` (5 s) por transação: nenhuma requisição
+  fica presa indefinidamente atrás de um lock.
+- Erros transitórios (`40001`, `40P01`, `55P03`, `57014`, `08xxx`, …) são re-tentados até 3×
+  com backoff exponencial + jitter; esgotado → `TransientError` (HTTP 503 + `Retry-After`).
+  Violações de integridade (`23xxx`) **nunca** são re-tentadas. Contadores:
+  `db_transaction_retries_total`, `db_lock_conflicts_total`.
+
+### Endpoints
+| Endpoint | Notas |
+|---|---|
+| `POST /wallets` | OPENING + CREDIT + `WalletBalanceChanged` (outbox) na mesma transação; duplicata (player, moeda) → 409 pela constraint única (seguro entre instâncias — testado com 20 requisições simultâneas) |
+| `GET /wallets/:id` | |
+| `GET /wallets/:id/ledger?cursor&limit` | do mais recente ao mais antigo; `limit` 1–200 (default 50) |
+| `POST /wallets/:id/reconciliation` | ver abaixo |
+| `GET /metrics` | Prometheus |
+
+**Cursor do ledger**: base64url de `{v, w, s}` (versão, wallet, último `sequence` entregue).
+Como `sequence` é único e imutável por wallet, lançamentos novos não deslocam páginas já lidas
+(diferente de OFFSET). Cursor malformado ou de outra wallet → 400 `INVALID_CURSOR`.
+
+**Reconciliação**: lê wallet e ledger no mesmo snapshot (`REPEATABLE READ`, read-only — não
+bloqueia escritores). A soma é feita em `numeric` no banco. Além de `stored == Σ ledger`, verifica
+a continuidade da cadeia (window function `lag`) e se o último `balance_after` bate com o saldo.
+Divergência → log `error`, `reconciliation_mismatches_total++`, `consistent: false`; **nada é
+corrigido**. Como o schema impede divergência, o teste a simula desligando os triggers.
+
+### Erros HTTP (envelope único `{ "error": { code, message, details? } }`)
+| Status | Quando |
+|---|---|
+| 400 | contrato inválido (zod), `Money` inválido, regra de formato do domínio, cursor inválido |
+| 404 | recurso ou rota inexistente |
+| 409 | conflito: wallet duplicada; (fase 4) idempotency key com payload diferente |
+| 422 | (fase 4) rejeição por regra de negócio — corpo traz o resultado da transação |
+| 202 | (fase 4) aceito com processamento pendente (`PENDING_REFERENCE`) |
+| 503 | falha transitória de infraestrutura, com `Retry-After` |
+| 500 | bug — sem detalhes internos na resposta, logado com stack |
+
+`amount` numérico no JSON é rejeitado já no schema zod (`must be a decimal string, not a number`).
