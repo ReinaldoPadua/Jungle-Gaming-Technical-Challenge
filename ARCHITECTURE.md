@@ -81,3 +81,55 @@ JSON canônico: chaves ordenadas recursivamente, `undefined` omitido, sem espaç
 (`WagerTransactionProcessed`, `WagerTransactionRejected`, `WagerTransactionPendingReference`,
 `WalletBalanceChanged`). `data` é cópia JSON congelada — só `MoneyProps`, nunca `Money`.
 O id da `OutboxMessage` é o `eventId`, chave de deduplicação dos consumidores.
+
+## 2. Schema e persistência (fase 2)
+
+Migrations em SQL escrito à mão (`migrations/`), reversíveis e testadas (`up → down → up`).
+O schema é a **última linha de defesa**: todas as garantias abaixo valem mesmo para SQL cru,
+sem passar pela aplicação (`test/integration/schema-constraints.test.ts`, 46 casos).
+
+### Garantias por tabela
+
+| Garantia | Mecanismo |
+|---|---|
+| saldo ≥ 0 | `CHECK (balance_amount >= 0)` em `wallets` e `CHECK` nos saldos do ledger |
+| uma wallet por player + moeda | `UNIQUE (player_id, currency)` |
+| `version` só muda com o saldo, sempre +1 | trigger `wallets_guard` |
+| todo saldo tem o lançamento que o produziu | constraint trigger **diferido** `wallets_commit_check` (no COMMIT: existe lançamento com `sequence = version` e `balance_after = balance`) |
+| idempotência | `UNIQUE (idempotency_key)` e `UNIQUE (provider_id, external_transaction_id)` |
+| estados terminais imutáveis; campos da requisição imutáveis; sem DELETE | trigger `wager_transactions_guard` |
+| referência no mesmo wallet/provider/player/rodada/moeda | FK composta `wtx_reference_scope_fk` |
+| reversão única | índice único parcial `wtx_single_reversal_uq` sobre `reference_transaction_id` (reversões `PROCESSED`) |
+| uma OPENING por wallet | índice único parcial `wtx_single_opening_uq` |
+| ledger append-only | trigger `forbid_mutation()` em UPDATE/DELETE |
+| aritmética do lançamento | `CHECK (after = before ± amount)` |
+| ≤ 1 lançamento por transação/wallet; ordem total | `UNIQUE (transaction_id, wallet_id)`, `UNIQUE (wallet_id, sequence)` |
+| valor, moeda e wallet do lançamento = os da transação | FK composta `(transaction_id, wallet_id, currency, amount)` |
+| moeda do lançamento = moeda da wallet | FK composta `(wallet_id, currency)` |
+| cadeia contínua (`before[n] = after[n-1]`, `sequence` +1) | trigger `wle_chain_guard` |
+| lançamento só para transação `PROCESSED` que move saldo, na direção certa | constraint trigger diferido `wle_commit_check` (LOSS não tem lançamento; ROLLBACK inverte a direção do lançamento da referência) |
+| dedup de mensagens | PK `(consumer_name, message_id)` em `inbox_messages` |
+| envelope da outbox imutável; publicação definitiva | `CHECK` (payload contém o próprio `eventId`) + trigger `outbox_guard` |
+
+Erros dos triggers usam SQLSTATE da classe 23 (`check_violation`, `restrict_violation`): a
+aplicação os trata como violação de integridade (bug ou dado inválido), nunca como erro transitório.
+
+Decisões:
+- **`wager_transactions.wallet_id` sem FK para `wallets`**: uma transação para wallet inexistente
+  precisa ser persistida como `REJECTED / WALLET_NOT_FOUND` e continuar auditável.
+- **Constraint triggers diferidos** permitem a ordem natural de escrita dentro da transação SQL
+  (wallet antes do ledger, ou vice-versa) e verificam o estado *final* no COMMIT.
+- **`TRUNCATE` não dispara triggers de linha**: usado só pela suíte de testes. Em produção, o role
+  da aplicação não deve ter privilégio de TRUNCATE/DELETE sobre o ledger (documentado como hardening).
+
+### Mapeamento ORM
+- O domínio não tem decorators. Cada tabela tem um **registro de persistência** (`*Record`) mapeado
+  por `EntitySchema` e um **mapper** que converte via `rehydrate` (leitura) e `toState` (escrita).
+- `numeric` é mapeado como `decimal` → **string** no TypeScript; `Money` é reconstruído por
+  `Money.from({ amount, currency })` com valor e moeda em colunas separadas.
+- `version` **não** usa o optimistic lock do MikroORM: a regra de incremento é do domínio e a
+  concorrência é pessimista (fase 4).
+- As migrations são a fonte de verdade do schema. Um teste garante que toda coluna mapeada existe
+  no banco; CHECKs, índices parciais e triggers não são modelados no metadata do ORM.
+- Sem relações declaradas entre os `EntitySchema`, a ordem de INSERT é controlada com `flush()`
+  explícito (transação → wallet → ledger). O use case da fase 4 encapsula isso.
