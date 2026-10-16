@@ -1,0 +1,80 @@
+name: wagering
+
+x-app-env: &app-env
+  NODE_ENV: production
+  PORT: "3000"
+  LOG_LEVEL: info
+  DATABASE_URL: postgres://wagering:wagering@postgres:5432/wagering
+  DB_POOL_MAX: "10"
+  AWS_REGION: us-east-1
+  AWS_ACCESS_KEY_ID: test
+  AWS_SECRET_ACCESS_KEY: test
+  SQS_ENDPOINT: http://localstack:4566
+  WAGER_QUEUE_NAME: wager-transactions.fifo
+  WAGER_DLQ_NAME: wager-transactions-dlq.fifo
+  EVENTS_QUEUE_NAME: wallet-events.fifo
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: wagering
+      POSTGRES_PASSWORD: wagering
+      POSTGRES_DB: wagering
+    ports: ["5432:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    # deixa os deadlocks/lock waits visíveis no log durante os testes de concorrência
+    command: ["postgres", "-c", "log_lock_waits=on", "-c", "deadlock_timeout=200ms", "-c", "max_connections=300"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wagering -d wagering"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  localstack:
+    # Tag fixa: a partir de 2026 as tags mais novas da LocalStack exigem
+    # LOCALSTACK_AUTH_TOKEN. Se esta tag também exigir, veja README (MiniStack).
+    image: localstack/localstack:4.4
+    environment:
+      SERVICES: sqs
+      AWS_DEFAULT_REGION: us-east-1
+      SQS_ENDPOINT_STRATEGY: path
+      EAGER_SERVICE_LOADING: "1"
+    ports: ["4566:4566"]
+    volumes:
+      - ./docker/localstack/init-sqs.sh:/etc/localstack/init/ready.d/init-sqs.sh:ro
+    healthcheck:
+      # o init script grava este marcador só depois de criar todas as filas
+      test: ["CMD-SHELL", "test -f /tmp/sqs-ready"]
+      interval: 2s
+      timeout: 3s
+      retries: 60
+
+  migrate:
+    build: .
+    profiles: ["app"]
+    environment: *app-env
+    command: ["bun", "scripts/migrate.ts", "up"]
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  app:
+    build: .
+    profiles: ["app"]
+    environment: *app-env
+    # `docker compose --profile app up --scale app=3` → portas 3000..3002 no host
+    ports: ["3000-3002:3000"]
+    stop_grace_period: 30s
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      localstack: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "bun -e \"fetch('http://localhost:3000/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:

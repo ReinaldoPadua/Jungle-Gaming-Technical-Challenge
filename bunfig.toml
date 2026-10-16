@@ -1,0 +1,4 @@
+[test]
+preload = ["./test/setup.ts"]
+# testes de integração/concorrência sobem conexões reais — timeout generoso
+timeout = 30000

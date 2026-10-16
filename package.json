@@ -1,0 +1,43 @@
+{
+  "name": "distributed-wagering-processor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "bun@1.2.23",
+  "engines": { "bun": ">=1.2.0" },
+  "scripts": {
+    "dev": "bun --watch src/main.ts",
+    "start": "bun src/main.ts",
+    "migrate": "bun scripts/migrate.ts up",
+    "migrate:down": "bun scripts/migrate.ts down",
+    "migrate:status": "bun scripts/migrate.ts status",
+    "typecheck": "tsc --noEmit",
+    "infra:up": "docker compose up -d --wait postgres localstack",
+    "infra:down": "docker compose down -v",
+    "test": "bun test",
+    "test:unit": "bun test test/unit",
+    "test:spike": "bun test test/spike",
+    "test:integration": "bun test test/integration",
+    "test:concurrency": "bun test test/concurrency",
+    "test:all": "bun test"
+  },
+  "dependencies": {
+    "@aws-sdk/client-sqs": "^3.700.0",
+    "@mikro-orm/core": "^6.4.0",
+    "@mikro-orm/migrations": "^6.4.0",
+    "@mikro-orm/nestjs": "^6.1.0",
+    "@mikro-orm/postgresql": "^6.4.0",
+    "@nestjs/common": "^11.1.0",
+    "@nestjs/core": "^11.1.0",
+    "@nestjs/platform-express": "^11.1.0",
+    "big.js": "^7.0.1",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.1",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/big.js": "^6.2.2",
+    "@types/bun": "^1.2.0",
+    "typescript": "^5.7.2"
+  }
+}
