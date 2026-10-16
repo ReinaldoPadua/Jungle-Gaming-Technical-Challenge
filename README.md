@@ -4,7 +4,7 @@ Serviço financeiro distribuído que processa transações de apostas (BET / WIN
 vindas de múltiplos provedores, via HTTP e SQS, com idempotência persistente, ledger imutável e
 transactional outbox.
 
-> Status: **fases 0–4** (fundação, domínio, schema, API de wallet, processamento de transações). Veja o plano completo em [`docs/PLAN.md`](docs/PLAN.md).
+> Status: **fases 0–5** (fundação, domínio, schema, API de wallet, processamento de transações, outbox). Veja o plano completo em [`docs/PLAN.md`](docs/PLAN.md).
 > Decisões técnicas serão consolidadas em `ARCHITECTURE.md`.
 
 ## Stack
@@ -45,7 +45,8 @@ docker compose --profile app up --build --scale app=3
 | `bun run test:unit` / `test:integration` / `test:concurrency` | suítes por tipo |
 | `bun run infra:down` | derruba a infra e apaga os volumes |
 
-Os testes usam **PostgreSQL e LocalStack reais**: banco `wagering_test` e filas `*-test.fifo`
+Os testes usam **PostgreSQL e LocalStack reais**. Suítes que dependem do SQS são puladas com aviso
+explícito se a LocalStack não estiver no ar — banco `wagering_test` e filas `*-test.fifo`
 (criados automaticamente pelo compose). As variáveis vêm de `.env.test`, que o Bun carrega sozinho
 em `bun test`. O preload `test/setup.ts` recusa rodar se `DATABASE_URL` não apontar para um banco `*_test`.
 
@@ -83,7 +84,7 @@ Erros seguem sempre `{"error":{"code","message","details?"}}` — ver `ARCHITECT
 |---|---|
 | `wager-transactions.fifo` | entrada de transações (`MessageGroupId = walletId`) |
 | `wager-transactions-dlq.fifo` | DLQ — redrive com `maxReceiveCount = 5` |
-| `wallet-events.fifo` | eventos de integração publicados pela outbox |
+| `wallet-events.fifo` | eventos de integração publicados pela outbox (`MessageGroupId = walletId`, dedup por `eventId`) |
 
 ## Solução de problemas
 

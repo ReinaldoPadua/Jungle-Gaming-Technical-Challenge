@@ -8,15 +8,21 @@ export type CounterName =
   | 'wager_transactions_total'
   | 'idempotent_replays_total'
   | 'idempotency_conflicts_total'
-  | 'pending_reference_wakeups_total';
+  | 'pending_reference_wakeups_total'
+  | 'outbox_claimed_total'
+  | 'outbox_published_total'
+  | 'outbox_publish_failures_total';
+
+export type GaugeName = 'outbox_lag_seconds' | 'outbox_pending_messages';
 
 export type HistogramName = 'wager_processing_duration_seconds';
 
 export interface Metrics {
   increment(name: CounterName, labels?: Record<string, string>, value?: number): void;
   observe(name: HistogramName, value: number, labels?: Record<string, string>): void;
+  setGauge(name: GaugeName, value: number): void;
 }
 
 export const METRICS = Symbol('METRICS');
 
-export const noopMetrics: Metrics = { increment: () => {}, observe: () => {} };
+export const noopMetrics: Metrics = { increment: () => {}, observe: () => {}, setGauge: () => {} };

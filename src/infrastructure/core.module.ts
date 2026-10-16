@@ -3,6 +3,7 @@ import { Controller, Get, Global, Header, Inject, Module, Res } from '@nestjs/co
 import type { HttpResponse as Response } from '../interface/http/http-types';
 import { ENV, type Env } from '../config/env';
 import { CLOCK, systemClock } from '../shared/application/clock';
+import { FAULTS, faultsFromEnv } from '../shared/application/faults';
 import { ID_GENERATOR, uuidV7Generator } from '../shared/application/id-generator';
 import { APP_LOGGER, jsonLogger } from '../shared/application/logger';
 import { METRICS } from '../shared/application/metrics';
@@ -30,6 +31,7 @@ class MetricsController {
     { provide: CLOCK, useValue: systemClock },
     { provide: ID_GENERATOR, useValue: uuidV7Generator },
     { provide: APP_LOGGER, useValue: jsonLogger },
+    { provide: FAULTS, inject: [ENV], useFactory: (env: Env) => faultsFromEnv(env) },
     {
       provide: METRICS,
       inject: [ENV],
@@ -46,6 +48,6 @@ class MetricsController {
         }),
     },
   ],
-  exports: [CLOCK, ID_GENERATOR, APP_LOGGER, METRICS, UNIT_OF_WORK],
+  exports: [CLOCK, ID_GENERATOR, APP_LOGGER, METRICS, UNIT_OF_WORK, FAULTS],
 })
 export class CoreModule {}

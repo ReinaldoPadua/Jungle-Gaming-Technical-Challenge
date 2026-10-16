@@ -258,3 +258,56 @@ sobre estado), não 400: a transação é persistida como `REJECTED` e fica audi
   instâncias; 30 apostas disputando 100.00 → exatamente 10 aplicadas; replays cruzados em
   5 wallets — cada transação decidida exatamente uma vez.
 - `afterEach` de todas as suítes: `wallet.balance == Σ ledger` e nenhum `balance_after < 0`.
+
+## 5. Transactional outbox (fase 5)
+
+Os eventos (`WagerTransactionProcessed`, `WagerTransactionRejected`,
+`WagerTransactionPendingReference`, `WalletBalanceChanged`) são gravados em `outbox_messages`
+**na mesma transação SQL** da mudança financeira (fase 4). O `OutboxPublisher` só enxerga o que
+já foi confirmado — é impossível publicar antes do commit (testado: uma linha de transação
+aberta é invisível; uma transação revertida nunca vira evento).
+
+### Ciclo do publisher
+```
+claim:   UPDATE … SET locked_until = now + lease, locked_by = <instância>
+         WHERE id IN (SELECT … WHERE published_at IS NULL AND next_attempt_at <= now
+                       AND (locked_until IS NULL OR locked_until < now)
+                       ORDER BY occurred_at LIMIT n FOR UPDATE SKIP LOCKED)
+publish: SendMessageBatch (FIFO: MessageGroupId = aggregateId, MessageDeduplicationId = eventId)
+mark:    UPDATE … SET published_at = now WHERE id IN (…) AND published_at IS NULL
+falha:   domínio calcula backoff (1 s → 5 min); grava attempts/next_attempt_at/last_error e solta o lease
+```
+- Cada comando é autocontido (autocommit): nenhuma transação fica aberta durante o I/O com o broker.
+- **Múltiplos publishers**: `SKIP LOCKED` + lease garantem conjuntos disjuntos (testado com 5
+  claims simultâneos e 3 publishers drenando 300 mensagens: cada uma publicada exatamente uma vez).
+- **Crash**: se a instância morre com o lease (antes ou depois de publicar), o lease expira e
+  outra assume. Garantia **at-least-once**, nunca perda.
+- **Duplicatas seguras**: o id da mensagem é o `eventId`. O SQS FIFO descarta republicações dentro
+  da janela de 5 min (otimização); consumidores devem deduplicar por `eventId` (garantia) e usar
+  `walletVersion` para ordenar eventos da mesma wallet.
+- **Nunca descarta**: tentativas ilimitadas com backoff; `outbox_publish_failures_total`,
+  `outbox_pending_messages` e `outbox_lag_seconds` (idade da mensagem pendente mais antiga) tornam o
+  problema visível em vez de silencioso.
+- `markPublished` usa `published_at IS NULL`: se duas instâncias publicaram a mesma mensagem
+  (lease expirado), a segunda marcação é no-op — o trigger `outbox_guard` proíbe reescrever a publicação.
+- `SIGTERM`: `stop()` termina o ciclo em andamento; o lease de mensagens não marcadas expira.
+
+### Ordem
+Ordem total por wallet **não** é garantida entre publishers concorrentes (um lease expirado pode
+republicar um evento antigo depois de um mais novo). Isso é intrínseco ao at-least-once; o contrato
+para consumidores é: deduplicar por `eventId` e descartar `WalletBalanceChanged` com `walletVersion`
+menor ou igual ao último aplicado.
+
+### Testes
+- `test/integration/outbox-publisher.test.ts` (Postgres real, broker em memória/arquivo): ordem,
+  invisibilidade antes do commit, leases disjuntos, 3 publishers concorrentes, crash antes e depois
+  de publicar, backoff/`last_error`, broker fora do ar, métricas de lag, start/stop — e um **crash
+  real de processo** (`FAULTS=outbox:after-publish` → `process.exit(137)`; o sobrevivente republica).
+- `test/integration/outbox-sqs.test.ts` (LocalStack): atributos FIFO, ordem por grupo, dedup por
+  `eventId` e o mesmo crash real com SQS — o consumidor recebe cada evento exatamente uma vez.
+  É pulada (com aviso) se o SQS não estiver acessível.
+
+### Injeção de falhas
+`FAULTS=<ponto>` arma pontos de crash (`outbox:after-publish`, `consumer:after-commit-before-ack`)
+que chamam `process.exit(137)` — sem `finally`, sem flush, igual a um `kill -9`. Recusado em
+`NODE_ENV=production`.

@@ -1,5 +1,5 @@
-import { Counter, Histogram, Registry, collectDefaultMetrics } from 'prom-client';
-import type { CounterName, HistogramName, Metrics } from '../../shared/application/metrics';
+import { Counter, Gauge, Histogram, Registry, collectDefaultMetrics } from 'prom-client';
+import type { CounterName, GaugeName, HistogramName, Metrics } from '../../shared/application/metrics';
 
 /** Definição estática: o Prometheus exige o mesmo conjunto de labels por métrica. */
 const COUNTERS: Record<CounterName, { help: string; labels: readonly string[] }> = {
@@ -12,6 +12,14 @@ const COUNTERS: Record<CounterName, { help: string; labels: readonly string[] }>
   idempotent_replays_total: { help: 'Requests answered from a previously stored result', labels: ['source'] },
   idempotency_conflicts_total: { help: 'Same idempotency key or external id with a different payload', labels: ['reason'] },
   pending_reference_wakeups_total: { help: 'Pending transactions woken up by the arrival of their reference', labels: [] },
+  outbox_claimed_total: { help: 'Outbox messages leased by this publisher', labels: [] },
+  outbox_published_total: { help: 'Outbox messages published to the broker', labels: ['event_type'] },
+  outbox_publish_failures_total: { help: 'Outbox publish attempts that failed and were rescheduled', labels: [] },
+};
+
+const GAUGES: Record<GaugeName, string> = {
+  outbox_lag_seconds: 'Age in seconds of the oldest unpublished outbox message (0 when empty)',
+  outbox_pending_messages: 'Unpublished outbox messages',
 };
 
 const HISTOGRAMS: Record<HistogramName, { help: string; labels: readonly string[]; buckets: number[] }> = {
@@ -26,6 +34,7 @@ export class PromMetrics implements Metrics {
   readonly registry = new Registry();
   private readonly counters: Record<CounterName, Counter>;
   private readonly histograms: Record<HistogramName, Histogram>;
+  private readonly gauges: Record<GaugeName, Gauge>;
 
   constructor(opts: { defaultMetrics?: boolean; instanceId?: string } = {}) {
     if (opts.instanceId) this.registry.setDefaultLabels({ instance_id: opts.instanceId });
@@ -42,6 +51,13 @@ export class PromMetrics implements Metrics {
         new Histogram({ name, help: def.help, labelNames: [...def.labels], buckets: def.buckets, registers: [this.registry] }),
       ]),
     ) as Record<HistogramName, Histogram>;
+    this.gauges = Object.fromEntries(
+      Object.entries(GAUGES).map(([name, help]) => [name, new Gauge({ name, help, registers: [this.registry] })]),
+    ) as Record<GaugeName, Gauge>;
+  }
+
+  setGauge(name: GaugeName, value: number): void {
+    this.gauges[name].set(value);
   }
 
   observe(name: HistogramName, value: number, labels: Record<string, string> = {}): void {
