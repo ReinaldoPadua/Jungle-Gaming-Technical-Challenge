@@ -15,11 +15,16 @@ const COUNTERS: Record<CounterName, { help: string; labels: readonly string[] }>
   outbox_claimed_total: { help: 'Outbox messages leased by this publisher', labels: [] },
   outbox_published_total: { help: 'Outbox messages published to the broker', labels: ['event_type'] },
   outbox_publish_failures_total: { help: 'Outbox publish attempts that failed and were rescheduled', labels: [] },
+  inbox_duplicates_total: { help: 'Redelivered messages detected by the persistent inbox', labels: ['consumer'] },
+  consumer_messages_total: { help: 'Messages handled by the SQS consumer, by outcome', labels: ['outcome'] },
+  dlq_messages_total: { help: 'Messages sent to the dead-letter queue, by reason', labels: ['reason'] },
+  consumer_retries_total: { help: 'Messages returned to the queue for a transient retry', labels: [] },
 };
 
 const GAUGES: Record<GaugeName, string> = {
   outbox_lag_seconds: 'Age in seconds of the oldest unpublished outbox message (0 when empty)',
   outbox_pending_messages: 'Unpublished outbox messages',
+  consumer_inflight_messages: 'Messages currently being processed by this consumer',
 };
 
 const HISTOGRAMS: Record<HistogramName, { help: string; labels: readonly string[]; buckets: number[] }> = {

@@ -311,3 +311,62 @@ menor ou igual ao último aplicado.
 `FAULTS=<ponto>` arma pontos de crash (`outbox:after-publish`, `consumer:after-commit-before-ack`)
 que chamam `process.exit(137)` — sem `finally`, sem flush, igual a um `kill -9`. Recusado em
 `NODE_ENV=production`.
+
+## 6. Consumidor SQS (fase 6)
+
+`WagerConsumer` lê `wager-transactions.fifo` e chama **o mesmo** `ProcessWagerTransactionUseCase`
+da entrada HTTP. A única diferença é o passo 0 dentro da mesma transação SQL:
+
+```
+INSERT inbox_messages (consumer_name, message_id) ON CONFLICT DO NOTHING
+  ├ nova      → processa normalmente → marca processed_at → COMMIT → ack (DeleteMessage)
+  ├ duplicata → mesmo hash: devolve o resultado já confirmado (sem efeito) → ack
+  └ duplicata com conteúdo diferente → INBOX_PAYLOAD_MISMATCH → DLQ
+```
+Duas camadas de dedup: a **inbox** (mesma mensagem reentregue) e a **idempotency key** (mensagens
+diferentes, ou HTTP e fila, para a mesma operação). O hash da inbox é SHA-256 do envelope em JSON
+canônico.
+
+### Classificação de desfechos
+| Situação | Ação |
+|---|---|
+| `PROCESSED`, `REJECTED` (regra de negócio), `PENDING_REFERENCE`, replay, duplicata | **ack** após o COMMIT |
+| JSON malformado, tipo desconhecido, envelope inválido (zod), `Money` inválido, contrato do domínio violado, conflito de idempotência, `INBOX_PAYLOAD_MISMATCH` | **permanente** → DLQ imediata (nenhum retry conserta) |
+| `TransientError`, SQLSTATE transitório, erro de conexão | **transitório** → sem ack; `ChangeMessageVisibility` com backoff `base·2^(n-1)` |
+| erro inesperado (bug, violação de integridade) | tratado como transitório **com limite** — nunca ack silencioso |
+| entregas ≥ `CONSUMER_MAX_RECEIVES` (5) | DLQ (`MAX_RECEIVES_EXCEEDED`) |
+
+A DLQ explícita leva `failureReason`, `failureDetail` e `originalReceiveCount` nos atributos. A
+redrive policy da fila (`maxReceiveCount = 5`) continua como rede de segurança caso o próprio envio
+à DLQ falhe.
+
+### Ordem e paralelismo
+Mensagens do mesmo `MessageGroupId` (walletId) num lote são tratadas **em sequência**; grupos
+distintos em paralelo. Se uma mensagem do grupo falha, as seguintes do lote voltam para a fila sem
+serem tocadas (`ChangeMessageVisibility 0`) — a ordem do grupo é preservada. O FIFO é otimização:
+mesmo fora de ordem, o banco garante as invariantes (referência ausente vira `PENDING_REFERENCE`).
+Custo conhecido: um backoff numa mensagem bloqueia o grupo (a wallet) durante o atraso.
+
+### Visibilidade e shutdown
+- `VisibilityTimeout` é passado no `ReceiveMessage` (30 s) e um heartbeat o estende a cada 1/3
+  enquanto o processamento durar — evita que a mesma mensagem seja entregue a outro consumidor
+  em paralelo durante uma transação lenta.
+- `SIGTERM` (`beforeApplicationShutdown`, antes de o ORM fechar): aborta o long-poll, termina as
+  mensagens já iniciadas (até `CONSUMER_SHUTDOWN_GRACE_MS`), devolve as recebidas e não iniciadas
+  com visibilidade 0. O que eventualmente ficar no meio volta após o visibility timeout e a inbox
+  deduplica. O publisher da outbox também para em `beforeApplicationShutdown`.
+
+### Crash entre o commit e o ack
+`FAULTS=consumer:after-commit-before-ack` mata o processo logo após o COMMIT. A mensagem reaparece
+após o visibility timeout; o próximo consumidor encontra a inbox → ack sem efeito. Testado
+in-process (fila em memória) e com **processo real + SQS** (`consumer-sqs.test.ts`).
+
+### Testes
+- `wager-consumer.test.ts` (Postgres real, FIFO em memória com visibility/redrive/ordem por grupo):
+  caminho feliz, rejeição terminal, ordem BET→ROLLBACK, HTTP + fila com a mesma chave,
+  redelivery, mensagens distintas com a mesma chave, `INBOX_PAYLOAD_MISMATCH`, crash pós-commit,
+  envelopes e contratos inválidos → DLQ, conflito de idempotência → DLQ, transitório com retry,
+  transitório persistente → DLQ, ordem preservada após falha, shutdown, 3 consumidores com
+  duplicatas, consumidor + HTTP concorrentes.
+- `consumer-sqs.test.ts` (LocalStack): processamento real, DLQ com atributos, crash real entre
+  commit e ack, `MAX_RECEIVES_EXCEEDED`.

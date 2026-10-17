@@ -3,6 +3,7 @@ import type { EntityManager, MikroORM } from '@mikro-orm/postgresql';
 import { TransientError } from '../../shared/application/errors';
 import type { Metrics } from '../../shared/application/metrics';
 import type { TransactionalRepositories, UnitOfWork, UnitOfWorkOptions } from '../../shared/application/unit-of-work';
+import { MikroInboxRepository } from '../../modules/messaging/infrastructure/persistence/mikro-inbox.repository';
 import { MikroOutboxRepository } from '../../modules/messaging/infrastructure/persistence/mikro-outbox.repository';
 import {
   MikroLedgerRepository,
@@ -68,6 +69,7 @@ export class MikroUnitOfWork implements UnitOfWork {
       ledger: new MikroLedgerRepository(em),
       wagerTransactions: new MikroWagerTransactionRepository(em),
       outbox: new MikroOutboxRepository(em),
+      inbox: new MikroInboxRepository(em),
     };
   }
 }

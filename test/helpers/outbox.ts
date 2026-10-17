@@ -58,7 +58,9 @@ export class FilePublisher implements EventPublisher {
   }
 }
 
-export class CrashError extends Error {}
+export class CrashError extends Error {
+  override name = 'CrashError';
+}
 
 /** Faults para testes in-process: em vez de matar o processo, lança CrashError. */
 export const crashAt = (point: FaultPoint): Faults => ({

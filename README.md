@@ -4,7 +4,7 @@ Serviço financeiro distribuído que processa transações de apostas (BET / WIN
 vindas de múltiplos provedores, via HTTP e SQS, com idempotência persistente, ledger imutável e
 transactional outbox.
 
-> Status: **fases 0–5** (fundação, domínio, schema, API de wallet, processamento de transações, outbox). Veja o plano completo em [`docs/PLAN.md`](docs/PLAN.md).
+> Status: **fases 0–6** (fundação, domínio, schema, API de wallet, processamento de transações, outbox, consumidor SQS). Veja o plano completo em [`docs/PLAN.md`](docs/PLAN.md).
 > Decisões técnicas serão consolidadas em `ARCHITECTURE.md`.
 
 ## Stack
@@ -85,6 +85,21 @@ Erros seguem sempre `{"error":{"code","message","details?"}}` — ver `ARCHITECT
 | `wager-transactions.fifo` | entrada de transações (`MessageGroupId = walletId`) |
 | `wager-transactions-dlq.fifo` | DLQ — redrive com `maxReceiveCount = 5` |
 | `wallet-events.fifo` | eventos de integração publicados pela outbox (`MessageGroupId = walletId`, dedup por `eventId`) |
+
+## Enviando transações pela fila
+
+```bash
+aws --endpoint-url http://localhost:4566 sqs send-message \
+  --queue-url http://localhost:4566/000000000000/wager-transactions.fifo \
+  --message-group-id <walletId> --message-deduplication-id msg-123 \
+  --message-body '{"messageId":"msg-123","type":"WagerTransactionRequested","occurredAt":"2026-07-29T15:00:00.000Z",
+    "data":{"providerId":"provider-a","externalTransactionId":"transaction-123","idempotencyKey":"provider-a:transaction-123",
+    "playerId":"<playerId>","walletId":"<walletId>","roundId":"round-987","gameId":"fortune-chimp","kind":"BET",
+    "money":{"amount":"25.00","currency":"BRL"}}}'
+```
+
+O consumidor sobe junto com a API (`CONSUMER_ENABLED=true`). Mensagens inválidas vão para
+`wager-transactions-dlq.fifo` com o motivo em `failureReason`.
 
 ## Solução de problemas
 

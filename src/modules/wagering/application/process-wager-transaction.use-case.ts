@@ -4,6 +4,7 @@ import type { Metrics } from '../../../shared/application/metrics';
 import type { TransactionalRepositories, UnitOfWork } from '../../../shared/application/unit-of-work';
 import { Money, type MoneyProps } from '../../../shared/domain/money';
 import type { EventContext, IntegrationEvent } from '../../../shared/events/integration-event';
+import { InboxMessage } from '../../messaging/domain/inbox-message';
 import { OutboxMessage } from '../../messaging/domain/outbox-message';
 import {
   WagerTransactionPendingReference,
@@ -15,7 +16,7 @@ import type { ReferenceRetryPolicy } from '../domain/reference-retry-policy';
 import { settle, type SettlementOutcome } from '../domain/wager-settlement';
 import { WagerTransaction } from '../domain/wager-transaction';
 import type { WagerTransactionKind } from '../domain/wager-transaction-kind';
-import { ExternalTransactionConflictError, IdempotencyKeyConflictError } from './errors';
+import { ExternalTransactionConflictError, IdempotencyKeyConflictError, InboxPayloadMismatchError } from './errors';
 import { computePayloadHash } from './payload-hash';
 import { toWagerResult, type WagerResult } from './wager.views';
 
@@ -39,6 +40,16 @@ export interface ProcessWagerCommand {
   source: WagerSource;
 }
 
+/** Metadados de entrega quando o comando vem de uma fila (inbox persistente). */
+export interface DeliveryContext {
+  consumerName: string;
+  messageId: string;
+  /** hash do conteúdo da mensagem — mesmo messageId com outro conteúdo é rejeitado */
+  payloadHash: string;
+}
+
+export type ProcessOutcome = 'replay' | 'duplicate_message' | SettlementOutcome['type'];
+
 /**
  * Use case ÚNICO para HTTP e SQS. Uma transação SQL:
  *
@@ -50,6 +61,9 @@ export interface ProcessWagerCommand {
  *  5. grava tx, wallet, ledger e eventos na outbox
  *  6. acorda transações PENDING_REFERENCE que esperavam por esta
  *  COMMIT → só então a resposta/ack
+ *
+ * Vindo da fila, o passo 0 registra a mensagem na inbox (mesma transação):
+ * redelivery do mesmo messageId devolve o resultado já confirmado sem efeito novo.
  */
 export class ProcessWagerTransactionUseCase {
   constructor(
@@ -60,18 +74,50 @@ export class ProcessWagerTransactionUseCase {
     private readonly retryPolicy: ReferenceRetryPolicy,
   ) {}
 
-  async execute(cmd: ProcessWagerCommand): Promise<WagerResult> {
+  async execute(cmd: ProcessWagerCommand, delivery?: DeliveryContext): Promise<WagerResult> {
+    return (await this.executeDetailed(cmd, delivery)).result;
+  }
+
+  /** Igual a execute(), expondo também o desfecho (usado pelo consumidor para métricas/logs). */
+  async executeDetailed(
+    cmd: ProcessWagerCommand,
+    delivery?: DeliveryContext,
+  ): Promise<{ result: WagerResult; outcome: ProcessOutcome }> {
     const startedAt = performance.now();
     // validações de contrato (Money, kind, referência) falham ANTES de abrir transação
     const money = Money.from(cmd.money);
     const payloadHash = computePayloadHash({ ...cmd, money });
     const transactionId = this.ids.next();
 
-    const { result, outcome } = await this.uow.run((repos) =>
-      this.process(repos, cmd, money, payloadHash, transactionId),
-    );
+    const { result, outcome } = await this.uow.run(async (repos) => {
+      // 0. inbox (somente entrada por fila)
+      let inbox: InboxMessage | undefined;
+      if (delivery) {
+        const receipt = await repos.inbox.receive(
+          InboxMessage.receive({ ...delivery, receivedAt: this.clock.now() }),
+        );
+        if (receipt.kind === 'duplicate') {
+          if (receipt.existing.payloadHash !== delivery.payloadHash) {
+            throw new InboxPayloadMismatchError(delivery.consumerName, delivery.messageId);
+          }
+          this.metrics.increment('inbox_duplicates_total', { consumer: delivery.consumerName });
+          const existing = await repos.wagerTransactions.findByIdempotencyKey(cmd.idempotencyKey);
+          if (!existing) throw new Error(`inbox has ${delivery.messageId} but no transaction for its idempotency key`);
+          return { result: toWagerResult(existing, true), outcome: 'duplicate_message' as const };
+        }
+        inbox = receipt.message;
+      }
 
-    if (outcome === 'replay') {
+      const processed = await this.process(repos, cmd, money, payloadHash, transactionId);
+
+      if (inbox) {
+        inbox.markProcessed(this.clock.now());
+        await repos.inbox.markProcessed(inbox);
+      }
+      return processed;
+    });
+
+    if (outcome === 'replay' || outcome === 'duplicate_message') {
       this.metrics.increment('idempotent_replays_total', { source: cmd.source });
     } else {
       this.metrics.increment('wager_transactions_total', { kind: cmd.kind, status: result.status, source: cmd.source });
@@ -81,7 +127,7 @@ export class ProcessWagerTransactionUseCase {
       outcome,
       source: cmd.source,
     });
-    return result;
+    return { result, outcome };
   }
 
   private async process(

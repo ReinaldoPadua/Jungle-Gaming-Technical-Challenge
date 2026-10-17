@@ -1,6 +1,6 @@
 import type { SQSClient } from '@aws-sdk/client-sqs';
 import { MikroORM } from '@mikro-orm/postgresql';
-import { Inject, Module, type OnApplicationBootstrap, type OnApplicationShutdown } from '@nestjs/common';
+import { type BeforeApplicationShutdown, Inject, Module, type OnApplicationBootstrap } from '@nestjs/common';
 import { ENV, type Env } from '../../config/env';
 import { QUEUE_URLS, type QueueUrls, SQS_CLIENT } from '../../infrastructure/messaging/sqs';
 import { CLOCK, type Clock } from '../../shared/application/clock';
@@ -37,7 +37,7 @@ export const OUTBOX_PUBLISHER = Symbol('OUTBOX_PUBLISHER');
   ],
   exports: [OUTBOX_PUBLISHER],
 })
-export class OutboxModule implements OnApplicationBootstrap, OnApplicationShutdown {
+export class OutboxModule implements OnApplicationBootstrap, BeforeApplicationShutdown {
   constructor(
     @Inject(OUTBOX_PUBLISHER) private readonly publisher: OutboxPublisher,
     @Inject(ENV) private readonly env: Env,
@@ -48,7 +48,7 @@ export class OutboxModule implements OnApplicationBootstrap, OnApplicationShutdo
   }
 
   /** SIGTERM: termina o ciclo em andamento; leases pendentes expiram e outra instância assume. */
-  async onApplicationShutdown(): Promise<void> {
+  async beforeApplicationShutdown(): Promise<void> {
     await this.publisher.stop();
   }
 }

@@ -1,4 +1,4 @@
-import type { OutboxRepository } from '../../modules/messaging/application/ports';
+import type { InboxRepository, OutboxRepository } from '../../modules/messaging/application/ports';
 import type { LedgerRepository, WalletRepository } from '../../modules/wallet/application/ports';
 import type { WagerTransactionRepository } from '../../modules/wagering/application/ports';
 
@@ -8,6 +8,7 @@ export interface TransactionalRepositories {
   readonly ledger: LedgerRepository;
   readonly wagerTransactions: WagerTransactionRepository;
   readonly outbox: OutboxRepository;
+  readonly inbox: InboxRepository;
 }
 
 export interface UnitOfWorkOptions {

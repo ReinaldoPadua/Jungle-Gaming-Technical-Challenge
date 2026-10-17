@@ -11,9 +11,13 @@ export type CounterName =
   | 'pending_reference_wakeups_total'
   | 'outbox_claimed_total'
   | 'outbox_published_total'
-  | 'outbox_publish_failures_total';
+  | 'outbox_publish_failures_total'
+  | 'inbox_duplicates_total'
+  | 'consumer_messages_total'
+  | 'dlq_messages_total'
+  | 'consumer_retries_total';
 
-export type GaugeName = 'outbox_lag_seconds' | 'outbox_pending_messages';
+export type GaugeName = 'outbox_lag_seconds' | 'outbox_pending_messages' | 'consumer_inflight_messages';
 
 export type HistogramName = 'wager_processing_duration_seconds';
 

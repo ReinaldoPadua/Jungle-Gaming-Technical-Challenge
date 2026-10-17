@@ -1,4 +1,20 @@
+import type { InboxMessage } from '../domain/inbox-message';
 import type { OutboxMessage } from '../domain/outbox-message';
+
+/** Resultado do registro de uma mensagem recebida na inbox. */
+export type InboxReceipt =
+  | { readonly kind: 'new'; readonly message: InboxMessage }
+  /** já existia (redelivery): o efeito já foi confirmado junto com ela */
+  | { readonly kind: 'duplicate'; readonly existing: InboxMessage };
+
+export interface InboxRepository {
+  /**
+   * INSERT … ON CONFLICT DO NOTHING por (consumer_name, message_id). Se outra
+   * transação está registrando a mesma mensagem, o Postgres espera o desfecho dela.
+   */
+  receive(message: InboxMessage): Promise<InboxReceipt>;
+  markProcessed(message: InboxMessage): Promise<void>;
+}
 
 export interface OutboxRepository {
   enqueue(...messages: OutboxMessage[]): Promise<void>;

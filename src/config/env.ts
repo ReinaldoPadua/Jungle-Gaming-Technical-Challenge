@@ -28,6 +28,16 @@ const EnvSchema = z.object({
   OUTBOX_LEASE_MS: z.coerce.number().int().min(100).default(30_000),
   OUTBOX_POLL_INTERVAL_MS: z.coerce.number().int().min(10).default(200),
 
+  CONSUMER_ENABLED: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
+  CONSUMER_NAME: z.string().min(1).max(64).default('wager-transactions-consumer'),
+  CONSUMER_BATCH_SIZE: z.coerce.number().int().min(1).max(10).default(10),
+  CONSUMER_WAIT_TIME_S: z.coerce.number().int().min(0).max(20).default(20),
+  CONSUMER_VISIBILITY_TIMEOUT_S: z.coerce.number().int().min(1).max(43_200).default(30),
+  CONSUMER_MAX_RECEIVES: z.coerce.number().int().min(1).default(5),
+  CONSUMER_RETRY_BASE_S: z.coerce.number().min(0).default(2),
+  CONSUMER_RETRY_MAX_S: z.coerce.number().min(0).default(300),
+  CONSUMER_SHUTDOWN_GRACE_MS: z.coerce.number().int().min(0).default(20_000),
+
   /** injeção de falhas para testes de recuperação (ver shared/application/faults.ts) */
   FAULTS: z.string().optional(),
 });

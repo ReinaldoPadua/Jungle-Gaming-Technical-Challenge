@@ -26,3 +26,13 @@ export class WagerTransactionNotFoundError extends NotFoundError {
     super('TRANSACTION_NOT_FOUND', `wager transaction ${what} not found`);
   }
 }
+
+/** Mesmo messageId com conteúdo diferente: mensagem corrompida/forjada — nunca processar. */
+export class InboxPayloadMismatchError extends ConflictError {
+  constructor(consumerName: string, messageId: string) {
+    super('INBOX_PAYLOAD_MISMATCH', `message ${messageId} was already received by ${consumerName} with a different payload`, {
+      consumerName,
+      messageId,
+    });
+  }
+}
