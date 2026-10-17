@@ -26,4 +26,12 @@ export interface WagerTransactionRepository {
    * linhas que o worker está processando (evita deadlock wallet ↔ pendente).
    */
   wakeDependents(providerId: string, externalTransactionId: string, now: Date): Promise<number>;
+  /** Ids de PENDING_REFERENCE vencidas (sem lock — só candidatos), da mais antiga para a mais nova. */
+  findDuePendingReferenceIds(now: Date, limit: number): Promise<string[]>;
+  /**
+   * Trava (FOR UPDATE SKIP LOCKED) uma pendente ainda vencida. undefined se outro worker a
+   * está processando, se já saiu de PENDING_REFERENCE ou se foi reagendada.
+   */
+  lockDuePendingReference(id: string, now: Date): Promise<WagerTransaction | undefined>;
+  countPendingReference(): Promise<number>;
 }

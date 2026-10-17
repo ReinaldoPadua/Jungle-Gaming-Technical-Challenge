@@ -38,6 +38,11 @@ const EnvSchema = z.object({
   CONSUMER_RETRY_MAX_S: z.coerce.number().min(0).default(300),
   CONSUMER_SHUTDOWN_GRACE_MS: z.coerce.number().int().min(0).default(20_000),
 
+  PENDING_WORKER_ENABLED: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
+  PENDING_WORKER_BATCH_SIZE: z.coerce.number().int().min(1).max(500).default(50),
+  PENDING_WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(4),
+  PENDING_WORKER_POLL_INTERVAL_MS: z.coerce.number().int().min(10).default(500),
+
   /** injeção de falhas para testes de recuperação (ver shared/application/faults.ts) */
   FAULTS: z.string().optional(),
 });

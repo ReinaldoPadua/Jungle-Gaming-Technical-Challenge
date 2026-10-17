@@ -76,6 +76,35 @@ export class MikroWagerTransactionRepository implements WagerTransactionReposito
     return rows.length;
   }
 
+  async findDuePendingReferenceIds(now: Date, limit: number): Promise<string[]> {
+    const rows = await this.em.execute<{ id: string }[]>(
+      `select id from wager_transactions
+        where status = 'PENDING_REFERENCE' and next_attempt_at <= ?
+        order by next_attempt_at
+        limit ?`,
+      [now, limit],
+    );
+    return rows.map((r) => r.id);
+  }
+
+  async lockDuePendingReference(id: string, now: Date): Promise<WagerTransaction | undefined> {
+    const rows = await this.em.execute<{ id: string }[]>(
+      `select id from wager_transactions
+        where id = ? and status = 'PENDING_REFERENCE' and next_attempt_at <= ?
+        for update skip locked`,
+      [id, now],
+    );
+    if (rows.length === 0) return undefined;
+    return this.findById(id);
+  }
+
+  async countPendingReference(): Promise<number> {
+    const [row] = await this.em.execute<{ n: string }[]>(
+      `select count(*)::text as n from wager_transactions where status = 'PENDING_REFERENCE'`,
+    );
+    return Number(row!.n);
+  }
+
   private async one(where: Partial<WagerTransactionRecord>): Promise<WagerTransaction | undefined> {
     // refresh: lê sempre o estado do banco (a linha pode ter sido escrita por outra transação)
     const r = await this.em.findOne(WagerTransactionRecord, where as never, { refresh: true });

@@ -370,3 +370,43 @@ in-process (fila em memória) e com **processo real + SQS** (`consumer-sqs.test.
   duplicatas, consumidor + HTTP concorrentes.
 - `consumer-sqs.test.ts` (LocalStack): processamento real, DLQ com atributos, crash real entre
   commit e ack, `MAX_RECEIVES_EXCEEDED`.
+
+## 7. Referências fora de ordem — worker de PENDING_REFERENCE (fase 7)
+
+Quando a referência de um REFUND/ROLLBACK (ou a referência opcional de um WIN/LOSS) ainda não
+existe — ou existe mas não é terminal — a transação é persistida como `PENDING_REFERENCE`, a
+resposta é **202** (HTTP) ou **ack** (fila) e o evento `WagerTransactionPendingReference` é emitido
+uma única vez.
+
+### Worker
+`PendingReferenceWorker` roda em todas as instâncias (`PENDING_WORKER_ENABLED`):
+```
+SELECT id … WHERE status = 'PENDING_REFERENCE' AND next_attempt_at <= now ORDER BY next_attempt_at LIMIT n
+para cada id, numa transação SQL própria:
+  SELECT … FOR UPDATE SKIP LOCKED   (a pendente — exclusividade entre workers/instâncias)
+  → SettlementService.settleAndPersist  (lock da wallet → referência → settle() → persistência)
+```
+- O `SettlementService` é o **mesmo** código usado pelo HTTP e pela fila: as regras de negócio e a
+  persistência não são duplicadas. Ordem de locks idêntica (linha da transação → wallet).
+- `wakeDependents` (fase 4) antecipa `next_attempt_at` quando a referência chega, então o worker
+  aplica no próximo ciclo em vez de esperar o backoff. Cadeias (ROLLBACK de um REFUND pendente)
+  se resolvem em sequência: cada transação terminal acorda as que dependem dela.
+- Reagendamentos não emitem evento (só a primeira chegada); a decisão final emite
+  `WagerTransactionProcessed` (+ `WalletBalanceChanged`) ou `WagerTransactionRejected`.
+
+### Limite — 10 tentativas ou 15 minutos
+Backoff exponencial 500 ms → 1 s → 2 s … até 60 s. Esgotado qualquer dos dois limites →
+`REJECTED / REFERENCE_NOT_FOUND`. Justificativa: provedores entregam a referência em segundos;
+depois de 15 min é um incidente operacional e o provedor precisa ser avisado em vez de esperar
+indefinidamente. Se a referência chega antes do worker decidir, ela é usada mesmo após o TTL (a
+espera só existe porque faltava a referência).
+
+Métricas: `pending_reference_retries_total{result}`, `pending_reference_transactions` (gauge),
+`pending_reference_wakeups_total`.
+
+### Testes (`pending-reference.test.ts`)
+ROLLBACK antes da BET via HTTP (202 → aplicado, replay reflete o estado final, evento pendente
+emitido uma vez); REFUND antes da BET via fila; cadeia ROLLBACK(REFUND(BET)) chegando ao contrário;
+referência que nunca chega → `REFERENCE_NOT_FOUND`; TTL; backoff crescente; referência inválida
+→ código específico; ROLLBACK de WIN gasto → `REVERSAL_WOULD_OVERDRAW`; 3 workers concorrentes
+sobre 30 pendentes (cada uma aplicada uma vez); worker + HTTP concorrentes na mesma wallet.

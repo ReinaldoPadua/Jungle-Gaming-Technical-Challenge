@@ -3,21 +3,14 @@ import type { IdGenerator } from '../../../shared/application/id-generator';
 import type { Metrics } from '../../../shared/application/metrics';
 import type { TransactionalRepositories, UnitOfWork } from '../../../shared/application/unit-of-work';
 import { Money, type MoneyProps } from '../../../shared/domain/money';
-import type { EventContext, IntegrationEvent } from '../../../shared/events/integration-event';
 import { InboxMessage } from '../../messaging/domain/inbox-message';
-import { OutboxMessage } from '../../messaging/domain/outbox-message';
-import {
-  WagerTransactionPendingReference,
-  WagerTransactionProcessed,
-  WagerTransactionRejected,
-  WalletBalanceChanged,
-} from '../domain/events';
 import type { ReferenceRetryPolicy } from '../domain/reference-retry-policy';
-import { settle, type SettlementOutcome } from '../domain/wager-settlement';
+import type { SettlementOutcome } from '../domain/wager-settlement';
 import { WagerTransaction } from '../domain/wager-transaction';
 import type { WagerTransactionKind } from '../domain/wager-transaction-kind';
 import { ExternalTransactionConflictError, IdempotencyKeyConflictError, InboxPayloadMismatchError } from './errors';
 import { computePayloadHash } from './payload-hash';
+import { SettlementService } from './settlement.service';
 import { toWagerResult, type WagerResult } from './wager.views';
 
 export type WagerSource = 'http' | 'sqs' | 'worker';
@@ -71,8 +64,12 @@ export class ProcessWagerTransactionUseCase {
     private readonly clock: Clock,
     private readonly ids: IdGenerator,
     private readonly metrics: Metrics,
-    private readonly retryPolicy: ReferenceRetryPolicy,
-  ) {}
+    retryPolicy: ReferenceRetryPolicy,
+  ) {
+    this.settlement = new SettlementService(ids, metrics, retryPolicy);
+  }
+
+  private readonly settlement: SettlementService;
 
   async execute(cmd: ProcessWagerCommand, delivery?: DeliveryContext): Promise<WagerResult> {
     return (await this.executeDetailed(cmd, delivery)).result;
@@ -160,58 +157,13 @@ export class ProcessWagerTransactionUseCase {
       return { result: await this.replayOrConflict(repos, tx), outcome: 'replay' };
     }
 
-    // 2. lock da wallet — serializa todas as operações desta wallet entre instâncias
-    const wallet = await repos.wallets.findByIdForUpdate(tx.walletId);
-
-    // 3. referência (mesmo provider) e reversões já aplicadas sobre ela
-    const reference = tx.referenceExternalTransactionId
-      ? await repos.wagerTransactions.findByProviderExternalId(tx.providerId, tx.referenceExternalTransactionId)
-      : undefined;
-    const reversalsOfReference = reference ? await repos.wagerTransactions.findByReferenceTransactionId(reference.id) : [];
-
-    // 4. regras de negócio
-    const outcome = settle({
-      tx,
-      wallet,
-      reference,
-      reversalsOfReference,
-      ledgerEntryId: this.ids.next(),
+    // 2–6. lock da wallet, referência, regras, persistência, eventos, dependentes
+    const outcome = await this.settlement.settleAndPersist(repos, tx, {
       now,
-      retryPolicy: this.retryPolicy,
-    });
-
-    // 5. persistência — mesma transação SQL
-    await repos.wagerTransactions.update(tx);
-    const ctx = (): EventContext => ({
-      eventId: this.ids.next(),
       correlationId: cmd.correlationId,
-      ...(cmd.causationId !== undefined ? { causationId: cmd.causationId } : {}),
-      occurredAt: now,
+      causationId: cmd.causationId,
+      emitPendingEvent: true,
     });
-    const events: IntegrationEvent<unknown>[] = [];
-    switch (outcome.type) {
-      case 'processed':
-        if (outcome.entry && wallet) {
-          await repos.wallets.update(wallet);
-          await repos.ledger.append(outcome.entry);
-          events.push(WalletBalanceChanged.from(wallet, outcome.entry, ctx()));
-        }
-        events.push(WagerTransactionProcessed.from(tx, ctx()));
-        break;
-      case 'rejected':
-        events.push(WagerTransactionRejected.from(tx, ctx()));
-        break;
-      case 'pending_reference':
-        events.push(WagerTransactionPendingReference.from(tx, ctx()));
-        break;
-    }
-    await repos.outbox.enqueue(...events.map((e) => OutboxMessage.enqueue(e)));
-
-    // 6. quem esperava por esta transação é reprocessado já (worker da fase 7)
-    if (tx.isTerminal()) {
-      const woken = await repos.wagerTransactions.wakeDependents(tx.providerId, tx.externalTransactionId, now);
-      if (woken > 0) this.metrics.increment('pending_reference_wakeups_total', {}, woken);
-    }
 
     return { result: toWagerResult(tx, false), outcome: outcome.type };
   }

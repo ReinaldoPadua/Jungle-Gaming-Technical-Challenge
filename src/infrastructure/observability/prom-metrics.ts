@@ -19,12 +19,14 @@ const COUNTERS: Record<CounterName, { help: string; labels: readonly string[] }>
   consumer_messages_total: { help: 'Messages handled by the SQS consumer, by outcome', labels: ['outcome'] },
   dlq_messages_total: { help: 'Messages sent to the dead-letter queue, by reason', labels: ['reason'] },
   consumer_retries_total: { help: 'Messages returned to the queue for a transient retry', labels: [] },
+  pending_reference_retries_total: { help: 'PENDING_REFERENCE reprocessing attempts, by result', labels: ['result'] },
 };
 
 const GAUGES: Record<GaugeName, string> = {
   outbox_lag_seconds: 'Age in seconds of the oldest unpublished outbox message (0 when empty)',
   outbox_pending_messages: 'Unpublished outbox messages',
   consumer_inflight_messages: 'Messages currently being processed by this consumer',
+  pending_reference_transactions: 'Transactions waiting for their reference (PENDING_REFERENCE)',
 };
 
 const HISTOGRAMS: Record<HistogramName, { help: string; labels: readonly string[]; buckets: number[] }> = {

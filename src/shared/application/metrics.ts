@@ -15,9 +15,10 @@ export type CounterName =
   | 'inbox_duplicates_total'
   | 'consumer_messages_total'
   | 'dlq_messages_total'
-  | 'consumer_retries_total';
+  | 'consumer_retries_total'
+  | 'pending_reference_retries_total';
 
-export type GaugeName = 'outbox_lag_seconds' | 'outbox_pending_messages' | 'consumer_inflight_messages';
+export type GaugeName = 'outbox_lag_seconds' | 'outbox_pending_messages' | 'consumer_inflight_messages' | 'pending_reference_transactions';
 
 export type HistogramName = 'wager_processing_duration_seconds';
 
