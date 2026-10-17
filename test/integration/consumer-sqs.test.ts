@@ -51,7 +51,7 @@ describe.skipIf(!available)('consumidor ← SQS FIFO (LocalStack)', () => {
     expect(await balance(w)).toBe('75.00');
     expect(await drainQueue(sqs, queues.wager, { idleMs: 500 })).toHaveLength(0);
     await assertAllWalletsConsistent(orm);
-  });
+  }, 60_000);
 
   test('mensagem venenosa vai para a DLQ com o motivo nos atributos', async () => {
     await send('{not json', 'poison');
@@ -61,7 +61,7 @@ describe.skipIf(!available)('consumidor ← SQS FIFO (LocalStack)', () => {
     expect(dead).toHaveLength(1);
     expect(dead[0]!.MessageAttributes?.failureReason?.StringValue).toBe('MALFORMED_JSON');
     expect(dead[0]!.Body).toBe('{not json');
-  });
+  }, 60_000);
 
   test('worker morto entre o commit e o ack (processo real) → redelivery → um único débito', async () => {
     const w = await createWallet(http, '100.00');
@@ -80,7 +80,7 @@ describe.skipIf(!available)('consumidor ← SQS FIFO (LocalStack)', () => {
     expect(rows[0]!.n).toBe('1');
     expect(await drainQueue(sqs, queues.wager, { idleMs: 500 })).toHaveLength(0);
     await assertAllWalletsConsistent(orm);
-  });
+  }, 60_000);
 
   test('redrive policy: erro transitório persistente acaba na DLQ', async () => {
     const w = await createWallet(http, '100.00');
@@ -95,5 +95,5 @@ describe.skipIf(!available)('consumidor ← SQS FIFO (LocalStack)', () => {
     expect(dead).toHaveLength(1);
     expect(dead[0]!.MessageAttributes?.failureReason?.StringValue).toBe('MAX_RECEIVES_EXCEEDED');
     expect(await balance(w)).toBe('100.00');
-  });
+  }, 60_000);
 });

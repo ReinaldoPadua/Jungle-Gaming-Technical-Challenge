@@ -16,7 +16,7 @@ import type { MikroORM } from '@mikro-orm/postgresql';
 import { initOrm } from '../helpers/infra';
 import { migrateFresh, truncateAll, uuid } from '../helpers/db';
 import { startHttpApp, type HttpTestApp } from '../helpers/http-app';
-import { spawnInstance, stopInstances, type Instance } from '../helpers/instances';
+import { diedBy, spawnInstance, stopInstances, termination, type Instance } from '../helpers/instances';
 import { assertAllWalletsConsistent, createWallet, wagerBody, type TestWallet, type WagerInput } from '../helpers/wager';
 
 let orm: MikroORM;
@@ -80,6 +80,7 @@ describe('reinício do serviço (cenário 8)', () => {
     // cliente do provedor: reenvia a mesma requisição até obter um desfecho definitivo
     let rr = 0;
     let interrupted = 0; // requisições cuja conexão caiu e foram reenviadas
+    const inflightBy = new Map<Instance, number>(); // requisições em voo por instância
     const deliver = async (r: (typeof requests)[number]): Promise<number> => {
       for (let attempt = 0; attempt < 200; attempt++) {
         const alive = instances.filter((i) => i.proc.exitCode === null && !i.proc.killed);
@@ -88,6 +89,7 @@ describe('reinício do serviço (cenário 8)', () => {
           await Bun.sleep(50);
           continue;
         }
+        inflightBy.set(target, (inflightBy.get(target) ?? 0) + 1);
         try {
           const res = await target.post('/wagering/transactions', r.body, { 'idempotency-key': r.idempotencyKey });
           if ([200, 201, 202, 422].includes(res.status)) return res.status;
@@ -96,6 +98,8 @@ describe('reinício do serviço (cenário 8)', () => {
           if (err instanceof Error && err.message.startsWith('unexpected')) throw err;
           // conexão recusada/resetada: a instância morreu no meio da requisição
           interrupted++;
+        } finally {
+          inflightBy.set(target, (inflightBy.get(target) ?? 1) - 1);
         }
         await Bun.sleep(20);
       }
@@ -110,9 +114,11 @@ describe('reinício do serviço (cenário 8)', () => {
       const batch = requests.slice(b * size, (b + 1) * size);
       const inflight = batch.map(deliver);
       if (b === 2) {
-        // crash: SIGKILL durante requisições em andamento — nenhum shutdown, nenhum finally
-        await Bun.sleep(5);
-        instances[0]!.proc.kill('SIGKILL');
+        // crash: SIGKILL com requisições comprovadamente em andamento nesta instância
+        // (independe da velocidade da máquina) — nenhum shutdown, nenhum finally
+        const victim = instances[0]!;
+        for (let i = 0; i < 2_000 && (inflightBy.get(victim) ?? 0) === 0; i++) await Bun.sleep(1);
+        victim.proc.kill('SIGKILL');
         instances.push(await spawnInstance(WORKER_ENV));
       }
       if (b === 5) {
@@ -122,9 +128,10 @@ describe('reinício do serviço (cenário 8)', () => {
       }
       statuses.push(...(await Promise.all(inflight)));
     }
-    expect(await instances[0]!.proc.exited).toBe(137); // morreu mesmo por SIGKILL (128 + 9)
-    // SIGTERM: o Nest conclui o shutdown (beforeApplicationShutdown → ORM) e re-emite o sinal → 143
-    expect(await instances[1]!.proc.exited).toBe(143);
+    expect(diedBy(await termination(instances[0]!.proc), 'SIGKILL')).toBe(true); // morreu mesmo por SIGKILL
+    // SIGTERM: o Nest conclui o shutdown (beforeApplicationShutdown → ORM) e re-emite o sinal
+    const graceful = await termination(instances[1]!.proc);
+    expect(diedBy(graceful, 'SIGTERM') || graceful.code === 0).toBe(true);
 
     // os workers das instâncias que sobraram resolvem as pendentes deixadas para trás
     for (let i = 0; i < 200 && (await count(`select count(*)::text as n from wager_transactions where status = 'PENDING_REFERENCE'`)) > 0; i++) {

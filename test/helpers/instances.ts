@@ -47,3 +47,15 @@ export async function stopInstances(instances: Instance[]): Promise<void> {
   for (const i of instances) i.proc.kill('SIGTERM');
   await Promise.all(instances.map((i) => i.proc.exited));
 }
+
+/**
+ * Como o processo terminou, de forma portável. No Linux, `exited` de um processo morto por
+ * sinal é 128+N (137, 143); no macOS o Bun expõe o sinal em `signalCode` e o código pode diferir.
+ */
+export async function termination(proc: Subprocess): Promise<{ code: number | null; signal: string | null }> {
+  const code = await proc.exited;
+  return { code, signal: proc.signalCode == null ? null : String(proc.signalCode) };
+}
+
+export const diedBy = (t: { code: number | null; signal: string | null }, signal: 'SIGKILL' | 'SIGTERM') =>
+  t.signal === signal || t.code === (signal === 'SIGKILL' ? 137 : 143);

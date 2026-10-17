@@ -160,7 +160,7 @@ describe('limites da espera', () => {
     await Bun.sleep(80);
     await settleAll([worker()]);
     expect(await txState(res.transactionId)).toMatchObject({ status: 'REJECTED', failure_code: 'REFERENCE_NOT_FOUND' });
-  });
+  }, 60_000);
 
   test('reagendamento aplica backoff exponencial (attempts e next_attempt_at crescem)', async () => {
     const w = await createWallet(http, '100.00');
@@ -218,7 +218,7 @@ describe('concorrência do worker', () => {
     expect(await count(`select count(*)::text as n from wallet_ledger_entries where direction = 'CREDIT'`)).toBe(30 + 5); // rollbacks + aberturas
     expect(await count(`select count(*)::text as n from outbox_messages where event_type = 'WagerTransactionProcessed'`)).toBe(60);
     for (const w of wallets) expect(await balance(w)).toBe('1000.00');
-  });
+  }, 60_000);
 
   test('worker e HTTP concorrentes na mesma wallet: sem deadlock, invariantes preservadas', async () => {
     const w = await createWallet(http, '500.00');
@@ -235,5 +235,5 @@ describe('concorrência do worker', () => {
     await running.stop();
     expect(await count(`select count(*)::text as n from wager_transactions where kind = 'REFUND' and status = 'PROCESSED'`)).toBe(15);
     expect(await balance(w)).toBe('395.00'); // 500 − 15×5 + 15×5 − 15×7
-  });
+  }, 60_000);
 });

@@ -63,7 +63,7 @@ describe.skipIf(!available)('outbox → SQS FIFO (LocalStack)', () => {
       const seqs = bodies.filter((b) => b.aggregateId === agg).map((b) => Number(b.data.seq));
       expect(seqs).toEqual([...seqs].sort((a, b) => a - b));
     }
-  });
+  }, 60_000);
 
   test('republicação do mesmo eventId é descartada pelo SQS FIFO (janela de dedup)', async () => {
     const message = OutboxMessage.enqueue(TestEvent.make('agg', 1));
@@ -71,7 +71,7 @@ describe.skipIf(!available)('outbox → SQS FIFO (LocalStack)', () => {
     expect((await publisher.publish([message]))[0]!.ok).toBe(true);
     expect((await publisher.publish([message]))[0]!.ok).toBe(true);
     expect(await drainQueue(sqs, eventsUrl, { expected: 1 })).toHaveLength(1);
-  });
+  }, 60_000);
 
   test('crash real após publicar e antes de marcar → outra instância assume; consumidor recebe cada evento uma vez', async () => {
     const ids = await seedOutbox(orm, 25);
@@ -87,5 +87,5 @@ describe.skipIf(!available)('outbox → SQS FIFO (LocalStack)', () => {
     const eventIds = received.map((m) => JSON.parse(m.Body!).eventId);
     expect(new Set(eventIds)).toEqual(new Set(ids)); // nenhum perdido
     expect(eventIds).toHaveLength(25); // republicações dos 10 primeiros deduplicadas pelo broker
-  });
+  }, 60_000);
 });

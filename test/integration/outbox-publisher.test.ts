@@ -102,7 +102,7 @@ describe('outbox publisher', () => {
     expect(all).toHaveLength(300);
     expect(new Set(all)).toEqual(new Set(ids));
     expect(await pending()).toBe(0);
-  });
+  }, 60_000);
 
   test('leases são exclusivos: claims simultâneos recebem conjuntos disjuntos', async () => {
     await seedOutbox(orm, 30);
@@ -241,5 +241,5 @@ describe('crash real de processo', () => {
     expect(fromA).toHaveLength(10); // primeiro lote chegou ao broker antes do crash
     expect(new Set(lines.map((l) => l.id))).toEqual(new Set(ids)); // nenhum perdido
     expect(lines.length).toBe(35); // 10 republicados (mesmo eventId) + 25
-  });
+  }, 60_000);
 });

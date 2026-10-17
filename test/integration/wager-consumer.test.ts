@@ -260,7 +260,7 @@ describe('shutdown e concorrência', () => {
     expect(queue.pending).toBe(3);
     expect(queue.inFlight).toBe(0); // as demais voltaram imediatamente (visibility 0)
     expect(await balance(w)).toBe('99.00');
-  });
+  }, 60_000);
 
   test('3 consumidores na mesma fila, mensagens duplicadas e várias wallets → cada transação uma vez', async () => {
     const wallets = await Promise.all(Array.from({ length: 4 }, () => createWallet(http, '100.00')));
@@ -276,7 +276,7 @@ describe('shutdown e concorrência', () => {
     expect(queue.dlq).toHaveLength(0);
     expect(await count(`select count(*)::text as n from wager_transactions where kind <> 'OPENING'`)).toBe(messages.length);
     expect(await count(`select count(*)::text as n from inbox_messages`)).toBe(messages.length);
-  });
+  }, 60_000);
 
   test('consumidor e HTTP concorrentes na mesma wallet: saldo nunca negativo', async () => {
     const w = await createWallet(http, '100.00');
@@ -287,5 +287,5 @@ describe('shutdown e concorrência', () => {
     await Promise.all([drainConsumers(queue, [consumer]), ...httpBets]);
     expect(await balance(w)).toBe('0.00');
     expect(await count(`select count(*)::text as n from wager_transactions where status = 'PROCESSED' and kind = 'BET'`)).toBe(10);
-  });
+  }, 60_000);
 });

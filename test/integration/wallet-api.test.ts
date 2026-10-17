@@ -88,7 +88,7 @@ describe('POST /wallets', () => {
     expect(statuses.filter((s) => s === 409)).toHaveLength(19);
     expect(await exec(`select 1 from wallets where player_id = ?`, [playerId])).toHaveLength(1);
     expect(await exec(`select 1 from wallet_ledger_entries`)).toHaveLength(1);
-  });
+  }, 60_000);
 
   test.each([
     ['amount numérico', { playerId: uuid(), initialBalance: { amount: 10, currency: 'BRL' } }],

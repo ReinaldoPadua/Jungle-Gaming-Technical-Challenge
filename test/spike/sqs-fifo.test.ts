@@ -79,7 +79,7 @@ describe('spike: SQS FIFO on LocalStack', () => {
       }
     }
     expect(got).toEqual(['a', 'b']);
-  });
+  }, 60_000);
 
   test('ChangeMessageVisibility(0) makes an in-flight message immediately available', async () => {
     await send('c', 'dedup-c', 'wallet-2');
@@ -92,5 +92,5 @@ describe('spike: SQS FIFO on LocalStack', () => {
     await receive(mainUrl, 1);
     const inDlq = await receive(dlqUrl);
     expect(inDlq.map((m) => m.Body)).toContain('c');
-  });
+  }, 60_000);
 });

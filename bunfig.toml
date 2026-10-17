@@ -1,4 +1,4 @@
 [test]
 preload = ["./test/setup.ts"]
-# testes de integração/concorrência sobem conexões reais — timeout generoso
-timeout = 30000
+# Timeout: testes longos (SQS real, processos reais, reinício) declaram o próprio
+# timeout no test(...); os scripts `bun run test*` também passam --timeout.

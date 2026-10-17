@@ -48,7 +48,7 @@ describe('concorrência na mesma wallet', () => {
     expect(await count(`select count(*)::text as n from wallet_ledger_entries where wallet_id = ? and direction = 'DEBIT'`, [w.walletId])).toBe(1);
     expect(await count(`select count(*)::text as n from wager_transactions where wallet_id = ? and kind = 'BET'`, [w.walletId])).toBe(1);
     expect(await count(`select count(*)::text as n from outbox_messages where event_type = 'WalletBalanceChanged'`)).toBe(2); // opening + bet
-  });
+  }, 60_000);
 
   test('cenário obrigatório (seção 8): 100.00 e duas BET de 80.00 simultâneas — repetido 20×', async () => {
     for (let round = 0; round < 20; round++) {
@@ -72,7 +72,7 @@ describe('concorrência na mesma wallet', () => {
       }
       expect((await http.get(`/wallets/${w.walletId}`)).body.balance).toEqual(brl('20.00'));
     }
-  });
+  }, 60_000);
 
   test('hot wallet: 120 operações mistas simultâneas — saldo nunca negativo, exatidão total', async () => {
     const w = await createWallet(http, '500.00');
@@ -95,7 +95,7 @@ describe('concorrência na mesma wallet', () => {
     const applied = results.filter((r) => r.status === 201).length;
     expect(await count(`select count(*)::text as n from wallet_ledger_entries where wallet_id = ?`, [w.walletId])).toBe(applied + 1);
     expect((await http.post(`/wallets/${w.walletId}/reconciliation`)).body.consistent).toBe(true);
-  });
+  }, 60_000);
 });
 
 describe('wallets distintas em paralelo', () => {
@@ -107,7 +107,7 @@ describe('wallets distintas em paralelo', () => {
     expect(results.every((r) => r.status === 201)).toBe(true);
     const balances = await exec<{ balance_amount: string }>(`select balance_amount from wallets`);
     expect(balances.every((b) => b.balance_amount === '0.00')).toBe(true);
-  });
+  }, 60_000);
 });
 
 describe('múltiplas instâncias (3 processos independentes)', () => {
@@ -130,7 +130,7 @@ describe('múltiplas instâncias (3 processos independentes)', () => {
     expect(results.filter((r) => r.status === 201)).toHaveLength(1);
     expect(results.filter((r) => r.status === 200)).toHaveLength(29);
     expect((await http.get(`/wallets/${w.walletId}`)).body.balance).toEqual(brl('70.00'));
-  });
+  }, 60_000);
 
   test('3 instâncias disputando o saldo da mesma wallet: 30 BET de 10.00 sobre 100.00 → exatamente 10 aplicadas', async () => {
     const w = await createWallet(http, '100.00');
@@ -143,7 +143,7 @@ describe('múltiplas instâncias (3 processos independentes)', () => {
     expect(results.filter((r) => r.status === 201)).toHaveLength(10);
     expect(results.filter((r) => r.status === 422)).toHaveLength(20);
     expect((await http.get(`/wallets/${w.walletId}`)).body.balance).toEqual(brl('0.00'));
-  });
+  }, 60_000);
 
   test('3 instâncias × várias wallets × replays cruzados → invariantes preservadas', async () => {
     const wallets = await Promise.all(Array.from({ length: 5 }, () => createWallet(http, '200.00')));
@@ -158,5 +158,5 @@ describe('múltiplas instâncias (3 processos independentes)', () => {
     const firstDecisions = results.filter((r) => r.status === 201 || (r.status === 422 && !r.body.idempotentReplay));
     expect(firstDecisions).toHaveLength(reqs.length);
     for (const w of wallets) expect((await http.post(`/wallets/${w.walletId}/reconciliation`)).body.consistent).toBe(true);
-  });
+  }, 60_000);
 });
