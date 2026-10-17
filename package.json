@@ -23,6 +23,7 @@
     "test:concurrency": "bun test test/concurrency",
     "test:sqs": "bun test test/integration/outbox-sqs.test.ts test/integration/consumer-sqs.test.ts test/spike/sqs-fifo.test.ts",
     "test:auth": "bun test test/integration/auth-oidc.test.ts test/integration/auth-keycloak.test.ts",
+    "test:load": "NODE_ENV=test bun scripts/load-test.ts",
     "auth:up": "docker compose --profile auth up -d --wait keycloak",
     "test:all": "bun test"
   },

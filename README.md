@@ -48,7 +48,10 @@ docker compose --profile app up --build --scale app=3
 | `bun run test:integration` | PostgreSQL real (+ SQS real nas suítes `*-sqs`) |
 | `bun run test:concurrency` | paralelismo real, 3 processos, reinício com SIGKILL/SIGTERM |
 | `bun run test:sqs` | só as suítes que exigem a LocalStack |
+| `bun run test:auth` | autenticação OIDC (JWKS real; Keycloak real se `auth:up`) |
+| `bun run test:load` | teste de carga com relatório em `docs/load-test-results/` ([metodologia e análise](docs/LOAD_TEST.md)) |
 | `bun run infra:up` / `infra:down` | sobe / derruba a infra (o `down` apaga volumes) |
+| `bun run auth:up` | sobe o Keycloak (profile `auth`) |
 
 ### Testes
 
@@ -130,6 +133,28 @@ Eventos: `WagerTransactionProcessed`, `WagerTransactionRejected`, `WagerTransact
 
 ---
 
+## Autenticação (opcional)
+
+Desligada por padrão (`AUTH_MODE=none`). Com Keycloak:
+
+```bash
+bun run auth:up                                   # Keycloak + realm "wagering" (provider-a, provider-b)
+AUTH_MODE=oidc OIDC_ISSUER=http://localhost:8080/realms/wagering bun run dev
+
+TOKEN=$(curl -s -X POST localhost:8080/realms/wagering/protocol/openid-connect/token \
+  -d grant_type=client_credentials -d client_id=provider-a -d client_secret=provider-a-secret | jq -r .access_token)
+curl -s -H "Authorization: Bearer $TOKEN" localhost:3000/wallets/<walletId>
+```
+Sem token ou com token inválido → 401; operar em nome de outro `providerId` → 403. Em containers:
+`AUTH_MODE=oidc docker compose --profile auth --profile app up`. Detalhes em `ARCHITECTURE.md` §9.
+
+## Teste de carga
+
+`bun run test:load` sobe 3 instâncias, gera 30 s de tráfego misto (incluindo uma wallet disputada
+e replays) com um publisher de outbox real em paralelo, e reporta throughput, p50/p95/p99, taxa de
+erro, conflitos de concorrência e outbox lag, verificando as invariantes ao final. Metodologia,
+resultados e análise: [`docs/LOAD_TEST.md`](docs/LOAD_TEST.md).
+
 ## Observabilidade
 
 - **Logs:** JSON, uma linha por evento, com `correlationId`, `messageId`, `transactionId`,
@@ -152,7 +177,7 @@ Principais variáveis (todas com default; ver `src/config/env.ts` e `.env.exampl
 | `CONSUMER_ENABLED` · `CONSUMER_VISIBILITY_TIMEOUT_S` · `CONSUMER_MAX_RECEIVES` | true · 30 · 5 | consumidor |
 | `OUTBOX_PUBLISHER_ENABLED` · `OUTBOX_LEASE_MS` · `OUTBOX_BATCH_SIZE` | true · 30000 · 50 | publisher |
 | `PENDING_WORKER_ENABLED` · `PENDING_WORKER_POLL_INTERVAL_MS` | true · 500 | worker de pendentes |
-| `AUTH_MODE` | `none` | ver `ARCHITECTURE.md` §9 |
+| `AUTH_MODE` · `OIDC_ISSUER` · `OIDC_AUDIENCE` · `OIDC_JWKS_URI` | `none` · — · `wagering-api` · `<issuer>/protocol/openid-connect/certs` | autenticação (§9) |
 | `LOG_LEVEL` · `INSTANCE_ID` | info · hostname-pid | |
 | `FAULTS` | — | injeção de falhas para testes (recusado em produção) |
 
@@ -165,10 +190,12 @@ src/
     wallet/          domain · application · infrastructure · interface/http
     wagering/        domain (regras, settle) · application (use case, worker) · interface (http, sqs)
     messaging/       inbox/outbox (domínio, publisher, SQS)
-    auth/            ponto de extensão de autenticação
+    auth/            guard + validação OIDC (JWKS)
   infrastructure/    MikroORM (UnitOfWork, config), SQS, observabilidade
   interface/http/    filtro de erros, middleware de contexto, validação
 migrations/          SQL versionado e reversível (constraints, triggers)
+scripts/             migrate, load-test
+docker/              init do Postgres e da LocalStack, realm do Keycloak
 test/                unit · integration · concurrency · spike · helpers
 ```
 

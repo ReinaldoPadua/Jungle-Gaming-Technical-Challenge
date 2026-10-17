@@ -41,7 +41,7 @@ Camadas: `domain` (puro: sem Nest, ORM ou AWS) ← `application` (use cases + po
 | Idempotência | `INSERT … ON CONFLICT DO NOTHING` em duas chaves únicas + `payloadHash` (SHA-256 de JSON canônico) | o banco decide a corrida; replay ≠ conflito |
 | Invariantes | CHECKs, UNIQUEs, FKs compostas, índices parciais, triggers e **constraint triggers diferidos** | restrição 9: garantias no schema, não só no código |
 | Mensageria | inbox persistente + transactional outbox com lease; FIFO só como otimização | at-least-once seguro, sem perda e sem efeito duplicado |
-| Autenticação | não implementada; `ProviderAuthGuard` + `ProviderIdentityPort` (no-op) como ponto de extensão | 0 pontos; tempo investido em correção (§9) |
+| Autenticação | IdP externo (**Keycloak**, OIDC client-credentials) validado por JWKS; `AUTH_MODE=none` por padrão | sem autenticação artesanal; opcional sem impacto no núcleo (§9) |
 
 ### Índice
 1. Domínio · 2. Schema e persistência · 3. API de wallet · 4. Processamento de transações ·
@@ -507,23 +507,37 @@ um `error` final com `walletId`/`correlationId`. Nada é gravado; reenviar a mes
 
 ## 9. Autenticação
 
-**Decisão: não implementada** (o desafio permite e ela não pontua). O tempo foi para correção
-financeira, concorrência, idempotência e recuperação de falhas.
+**Implementada como opcional** (`AUTH_MODE=oidc`), com um Identity Provider externo — nada de
+tabela de usuários ou senha local. Padrão `AUTH_MODE=none`, para que avaliar o núcleo não dependa do IdP.
 
-**Ponto de extensão no código** (`src/modules/auth`):
-- `ProviderIdentityPort.authenticate(credentials)` → `ProviderIdentity { providerId?, subject }`.
-- `ProviderAuthGuard` aplicado aos controllers de wallet e wagering (não a `/health/*` nem
-  `/metrics`): sem identidade → 401; com identidade de provedor, `body.providerId` ou
-  `:providerId` diferente → 403.
-- `AUTH_MODE=none` (padrão) liga a implementação anônima; `AUTH_MODE=oidc` falha no boot de
-  propósito (não implementado) — nunca sobe "sem querer" sem autenticação achando que tem.
+**Desenho**
+- **Keycloak 26** no compose (`--profile auth`), com realm importado de
+  `docker/keycloak/wagering-realm.json`. Cada provedor (`provider-a`, `provider-b`) é um *client*
+  confidencial com **client-credentials grant** (máquina a máquina, sem usuário humano). Dois
+  *protocol mappers*: claim fixo `provider_id` e audience `wagering-api`.
+- `OidcProviderIdentity` (`src/modules/auth`) valida o bearer token com `jose`: assinatura via
+  **JWKS remoto**, com cache e rotação automática de chaves, `iss`, `aud`, `exp`/`nbf` (tolerância
+  de 5 s) e presença do claim `provider_id`. Falha ao buscar o JWKS **nega** o acesso (fail closed).
+- `ProviderAuthGuard` nos controllers de wallet e wagering: sem token ou token inválido → **401**;
+  `body.providerId` ou `:providerId` diferente do `provider_id` do token → **403**. `/health/*` e
+  `/metrics` ficam abertos.
+- Issuer estável: o Keycloak publica `iss = http://localhost:8080/realms/wagering`
+  (`KC_HOSTNAME`), e a aplicação no compose busca as chaves por `OIDC_JWKS_URI` no host interno
+  `keycloak:8080`.
+- Mensagens da fila são canal interno confiável (seção 2); o `providerId` delas continua sujeito às
+  validações de domínio (por exemplo, a referência só é resolvida no mesmo provider).
 
-**Desenho que seria adotado**: Keycloak (ou Zitadel) no compose; cada provedor é um *client*
-confidencial com *client credentials grant*; o token traz o claim `provider_id` (mapper do
-client). `OidcProviderIdentity` validaria o JWT com `jose` (JWKS do realm, cache das chaves,
-`iss`/`aud`/`exp`), e o guard já faz a amarração `provider_id == providerId` da operação.
-Mensagens da fila são canal interno confiável (seção 2), mas o `providerId` delas passa pelas
-mesmas validações de domínio (referência só no mesmo provider, etc.).
+**Testes**
+- `auth-oidc.test.ts`: um IdP mínimo com **JWKS real** (chaves RSA geradas no teste) e tokens
+  assinados cobre token válido, ausente, assinado por outra chave, expirado, com issuer ou
+  audience errados, sem claim e não-JWT (todos 401), além de 403 ao operar em nome de outro
+  provedor, sem nada gravado.
+- `auth-keycloak.test.ts`: **Keycloak real**. Obtém token por client-credentials, confere os claims
+  e o fluxo 201/403/401. Pulada com aviso se o Keycloak não estiver no ar.
+
+Limitação: wallets não têm dono por provedor (qualquer provedor autenticado cria e consulta wallets
+pelo id); a autorização é por `providerId` das transações. Um vínculo wallet ↔ operador seria a
+evolução natural.
 
 ## 10. Trade-offs e limitações
 
@@ -551,7 +565,6 @@ mesmas validações de domínio (referência só no mesmo provider, etc.).
   por idade seria necessário em produção; a inbox precisa reter pelo menos a janela de redelivery).
 - Correlação dos reprocessamentos do worker usa `pending-retry:<id>` em vez do `correlationId`
   original da requisição.
-- Autenticação não implementada (§9).
 - O ambiente onde parte do desenvolvimento foi validado não tinha Docker: as suítes de SQS real
   (`outbox-sqs`, `consumer-sqs`) rodam com `bun run infra:up` e são puladas com aviso sem LocalStack.
 
@@ -579,6 +592,8 @@ Todos contra **PostgreSQL real**; SQS real via LocalStack nas suítes `*-sqs`. I
 | **C5** worker morto após commit e antes do ack | `wager-consumer.test.ts` (in-process), `consumer-sqs.test.ts` (processo real) |
 | **C6** dois publishers sobre a mesma outbox | `outbox-publisher.test.ts` (3 publishers; crash real de processo), `outbox-sqs.test.ts` |
 | **C7** ROLLBACK/REFUND antes da referência | `pending-reference.test.ts` (HTTP e fila), `wagering-api.test.ts` |
+| autenticação (opcional) | `auth-oidc.test.ts` (JWKS real), `auth-keycloak.test.ts` (Keycloak) |
+| teste de carga (opcional) | `bun run test:load` — [docs/LOAD_TEST.md](docs/LOAD_TEST.md) |
 | **C8** reinício com consistência final | `restart-recovery.test.ts`: SIGKILL e SIGTERM no meio do tráfego, cliente reenviando, prova de unicidade, eventos, pendentes e reconciliação |
 
 ## 12. Falhas eliminatórias — como cada uma é evitada
