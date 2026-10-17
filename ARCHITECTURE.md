@@ -1,8 +1,54 @@
 # Arquitetura — Distributed Wagering Processor
 
-> Documento vivo: cada fase acrescenta suas decisões. Plano completo em [`docs/PLAN.md`](docs/PLAN.md).
+Serviço financeiro que processa transações de apostas (BET, WIN, LOSS, REFUND, ROLLBACK) de vários
+provedores, por HTTP e por SQS, e permanece correto com mensagens **duplicadas**, **fora de ordem**,
+**concorrentes**, com **múltiplas instâncias** e com **processos morrendo** em qualquer ponto.
 
-## 1. Domínio (fase 1)
+## 0. Visão geral
+
+```
+                 HTTP (Nest)                      SQS wager-transactions.fifo
+                     │                                       │
+             WageringController                        WagerConsumer ──► DLQ (permanentes)
+                     │      (zod, Idempotency-Key)           │  (inbox, ack pós-commit)
+                     └──────────────┬────────────────────────┘
+                                    ▼
+                    ProcessWagerTransactionUseCase  ◄── PendingReferenceWorker
+                                    │                    (PENDING_REFERENCE vencidas)
+                             SettlementService
+              lock da wallet → referência → settle() (domínio puro) → persistência
+                                    │
+        ┌──────────── uma transação SQL (UnitOfWork / MikroORM) ────────────┐
+        │ inbox_messages · wager_transactions · wallets · wallet_ledger_entries │
+        │                         · outbox_messages                            │
+        └──────────────────────────────────┬───────────────────────────────────┘
+                                           │ (após COMMIT)
+                                   OutboxPublisher (lease + SKIP LOCKED)
+                                           ▼
+                                SQS wallet-events.fifo
+```
+
+Camadas: `domain` (puro: sem Nest, ORM ou AWS) ← `application` (use cases + portas) ←
+`infrastructure` (MikroORM, SQS, Prometheus) e `interface` (HTTP, SQS). Módulos: `wallet`,
+`wagering`, `messaging`, `auth`.
+
+### Decisões principais (resumo)
+| Tema | Decisão | Por quê |
+|---|---|---|
+| ORM | **MikroORM 6**, `EntitySchema` em registros de persistência + mappers | preferencial no desafio; `em.transactional()`, `LockMode`, UoW explícito; domínio sem decorators |
+| Money | `big.js` estrito, escala 2, string no contrato; `numeric(20,2)` + `char(3)` no banco; driver devolve **string** | exatidão ponta a ponta, nunca `number` (teste de arquitetura garante) |
+| Estratégia transacional | uma transação SQL por operação, `READ COMMITTED` + **lock pessimista** na wallet; `lock_timeout`/`statement_timeout`; retry limitado de erros transitórios | hot wallet sem tempestade de retries; ordem de locks fixa ⇒ sem deadlock |
+| Idempotência | `INSERT … ON CONFLICT DO NOTHING` em duas chaves únicas + `payloadHash` (SHA-256 de JSON canônico) | o banco decide a corrida; replay ≠ conflito |
+| Invariantes | CHECKs, UNIQUEs, FKs compostas, índices parciais, triggers e **constraint triggers diferidos** | restrição 9: garantias no schema, não só no código |
+| Mensageria | inbox persistente + transactional outbox com lease; FIFO só como otimização | at-least-once seguro, sem perda e sem efeito duplicado |
+| Autenticação | não implementada; `ProviderAuthGuard` + `ProviderIdentityPort` (no-op) como ponto de extensão | 0 pontos; tempo investido em correção (§9) |
+
+### Índice
+1. Domínio · 2. Schema e persistência · 3. API de wallet · 4. Processamento de transações ·
+5. Transactional outbox · 6. Consumidor SQS · 7. Referências fora de ordem · 8. Observabilidade ·
+9. Autenticação · 10. Trade-offs e limitações · 11. Testes × requisitos · 12. Falhas eliminatórias
+
+## 1. Domínio
 
 O domínio (`src/shared/domain`, `src/modules/*/domain`) não importa NestJS, MikroORM nem AWS —
 um teste de arquitetura (`test/unit/architecture-guards.test.ts`) garante isso, assim como a
@@ -82,7 +128,7 @@ JSON canônico: chaves ordenadas recursivamente, `undefined` omitido, sem espaç
 `WalletBalanceChanged`). `data` é cópia JSON congelada — só `MoneyProps`, nunca `Money`.
 O id da `OutboxMessage` é o `eventId`, chave de deduplicação dos consumidores.
 
-## 2. Schema e persistência (fase 2)
+## 2. Schema e persistência
 
 Migrations em SQL escrito à mão (`migrations/`), reversíveis e testadas (`up → down → up`).
 O schema é a **última linha de defesa**: todas as garantias abaixo valem mesmo para SQL cru,
@@ -134,7 +180,7 @@ Decisões:
 - Sem relações declaradas entre os `EntitySchema`, a ordem de INSERT é controlada com `flush()`
   explícito (transação → wallet → ledger). O use case da fase 4 encapsula isso.
 
-## 3. API de wallet (fase 3)
+## 3. API de wallet
 
 ### Camadas
 ```
@@ -188,7 +234,7 @@ corrigido**. Como o schema impede divergência, o teste a simula desligando os t
 
 `amount` numérico no JSON é rejeitado já no schema zod (`must be a decimal string, not a number`).
 
-## 4. Processamento de transações (fase 4)
+## 4. Processamento de transações
 
 `ProcessWagerTransactionUseCase` é o **único** caminho de entrada para HTTP e SQS (fase 6).
 Uma transação SQL, nesta ordem:
@@ -259,7 +305,7 @@ sobre estado), não 400: a transação é persistida como `REJECTED` e fica audi
   5 wallets — cada transação decidida exatamente uma vez.
 - `afterEach` de todas as suítes: `wallet.balance == Σ ledger` e nenhum `balance_after < 0`.
 
-## 5. Transactional outbox (fase 5)
+## 5. Transactional outbox
 
 Os eventos (`WagerTransactionProcessed`, `WagerTransactionRejected`,
 `WagerTransactionPendingReference`, `WalletBalanceChanged`) são gravados em `outbox_messages`
@@ -312,7 +358,7 @@ menor ou igual ao último aplicado.
 que chamam `process.exit(137)` — sem `finally`, sem flush, igual a um `kill -9`. Recusado em
 `NODE_ENV=production`.
 
-## 6. Consumidor SQS (fase 6)
+## 6. Consumidor SQS
 
 `WagerConsumer` lê `wager-transactions.fifo` e chama **o mesmo** `ProcessWagerTransactionUseCase`
 da entrada HTTP. A única diferença é o passo 0 dentro da mesma transação SQL:
@@ -371,7 +417,7 @@ in-process (fila em memória) e com **processo real + SQS** (`consumer-sqs.test.
 - `consumer-sqs.test.ts` (LocalStack): processamento real, DLQ com atributos, crash real entre
   commit e ack, `MAX_RECEIVES_EXCEEDED`.
 
-## 7. Referências fora de ordem — worker de PENDING_REFERENCE (fase 7)
+## 7. Referências fora de ordem — worker de PENDING_REFERENCE
 
 Quando a referência de um REFUND/ROLLBACK (ou a referência opcional de um WIN/LOSS) ainda não
 existe — ou existe mas não é terminal — a transação é persistida como `PENDING_REFERENCE`, a
@@ -411,7 +457,7 @@ referência que nunca chega → `REFERENCE_NOT_FOUND`; TTL; backoff crescente; r
 → código específico; ROLLBACK de WIN gasto → `REVERSAL_WOULD_OVERDRAW`; 3 workers concorrentes
 sobre 30 pendentes (cada uma aplicada uma vez); worker + HTTP concorrentes na mesma wallet.
 
-## 8. Observabilidade (fase 8)
+## 8. Observabilidade
 
 ### Logs estruturados
 Uma linha JSON por evento (`JsonLogger`, sem dependência externa):
@@ -458,3 +504,92 @@ Outra transação segura o lock da wallet → `lock_timeout` (55P03) → 2 re-te
 503 + `Retry-After: 1`. Ficam registrados: `db_lock_conflicts_total{sqlstate="55P03"} += 3`,
 `db_transaction_retries_total += 2`, dois `warn` "transient database error, retrying transaction" e
 um `error` final com `walletId`/`correlationId`. Nada é gravado; reenviar a mesma requisição funciona.
+
+## 9. Autenticação
+
+**Decisão: não implementada** (o desafio permite e ela não pontua). O tempo foi para correção
+financeira, concorrência, idempotência e recuperação de falhas.
+
+**Ponto de extensão no código** (`src/modules/auth`):
+- `ProviderIdentityPort.authenticate(credentials)` → `ProviderIdentity { providerId?, subject }`.
+- `ProviderAuthGuard` aplicado aos controllers de wallet e wagering (não a `/health/*` nem
+  `/metrics`): sem identidade → 401; com identidade de provedor, `body.providerId` ou
+  `:providerId` diferente → 403.
+- `AUTH_MODE=none` (padrão) liga a implementação anônima; `AUTH_MODE=oidc` falha no boot de
+  propósito (não implementado) — nunca sobe "sem querer" sem autenticação achando que tem.
+
+**Desenho que seria adotado**: Keycloak (ou Zitadel) no compose; cada provedor é um *client*
+confidencial com *client credentials grant*; o token traz o claim `provider_id` (mapper do
+client). `OidcProviderIdentity` validaria o JWT com `jose` (JWKS do realm, cache das chaves,
+`iss`/`aud`/`exp`), e o guard já faz a amarração `provider_id == providerId` da operação.
+Mensagens da fila são canal interno confiável (seção 2), mas o `providerId` delas passa pelas
+mesmas validações de domínio (referência só no mesmo provider, etc.).
+
+## 10. Trade-offs e limitações
+
+**Trade-offs assumidos**
+- **Lock pessimista por wallet**: throughput de uma wallet muito quente é limitado pela duração da
+  transação (~ms). Em troca: cada requisição decidida uma vez, latência previsível, sem storm de
+  retries. Wallets diferentes escalam horizontalmente.
+- **Ledger de entrada simples** (um lançamento por transação/wallet). Partidas dobradas (conta
+  "casa" por moeda) seriam a evolução natural; o schema já permite (`UNIQUE(transaction_id, wallet_id)`).
+- **Ordem de eventos por wallet não é garantida** entre publishers concorrentes (at-least-once);
+  consumidores deduplicam por `eventId` e ordenam por `walletVersion` (§5).
+- **Backoff numa mensagem FIFO bloqueia o grupo** (a wallet) durante o atraso (§6).
+- **Constraint triggers diferidos** custam uma leitura extra por linha no COMMIT; em troca, saldo
+  e ledger são impossíveis de divergir, mesmo com SQL manual.
+- **Uma transação é revertida no máximo uma vez, por qualquer tipo** (interpretação mais
+  conservadora da regra 4): uma BET cujo REFUND foi desfeito por ROLLBACK não pode ser
+  reembolsada de novo.
+
+**Limitações conhecidas**
+- Moeda única na prática (BRL); o modelo é multi-moeda e conflitos de moeda são testados.
+- Reversão parcial fora de escopo (valor de REFUND/ROLLBACK precisa ser igual ao da referência).
+- `TRUNCATE` não dispara triggers de linha: em produção o role da aplicação não deve ter
+  `TRUNCATE`/`DELETE` no ledger (hardening de permissões não automatizado aqui).
+- Sem retenção/arquivamento de `inbox_messages` e `outbox_messages` publicadas (um job de limpeza
+  por idade seria necessário em produção; a inbox precisa reter pelo menos a janela de redelivery).
+- Correlação dos reprocessamentos do worker usa `pending-retry:<id>` em vez do `correlationId`
+  original da requisição.
+- Autenticação não implementada (§9).
+- O ambiente onde parte do desenvolvimento foi validado não tinha Docker: as suítes de SQS real
+  (`outbox-sqs`, `consumer-sqs`) rodam com `bun run infra:up` e são puladas com aviso sem LocalStack.
+
+## 11. Testes × requisitos (seção 13)
+
+Todos contra **PostgreSQL real**; SQS real via LocalStack nas suítes `*-sqs`. Invariante final
+(`assertAllWalletsConsistent`: `wallet.balance == Σ ledger`, nenhum saldo negativo) em `afterEach`.
+
+| Requisito | Onde |
+|---|---|
+| Money: escala, arredondamento, entradas inválidas | `unit/money.test.ts` |
+| invariantes da Wallet | `unit/wallet.test.ts` |
+| regras BET/WIN/LOSS/REFUND/ROLLBACK, conflito de moeda | `unit/wager-settlement.test.ts`, `unit/wager-transaction.test.ts` |
+| idempotency key com payload divergente | `unit/payload-hash.test.ts`, `integration/wagering-api.test.ts` |
+| migrations e constraints | `integration/schema-constraints.test.ts` (46 casos em SQL cru) |
+| atomicidade wallet/ledger/inbox/outbox | `integration/persistence-mapping.test.ts`, `outbox-publisher.test.ts` |
+| inbox e redelivery | `integration/wager-consumer.test.ts` |
+| publishers concorrentes sobre a mesma outbox | `integration/outbox-publisher.test.ts` |
+| retry e DLQ | `integration/wager-consumer.test.ts`, `consumer-sqs.test.ts` |
+| recuperação após reinicialização | `concurrency/restart-recovery.test.ts` |
+| **C1** mesma aposta 50× em paralelo | `concurrency/wagering-concurrency.test.ts` |
+| **C2** disputa de saldo (100 / 80 + 80) | idem (repetido 20×) |
+| **C3** wallets distintas em paralelo | idem |
+| **C4** ≥ 3 processos simultâneos | idem (3 processos `Bun.spawn`) |
+| **C5** worker morto após commit e antes do ack | `wager-consumer.test.ts` (in-process), `consumer-sqs.test.ts` (processo real) |
+| **C6** dois publishers sobre a mesma outbox | `outbox-publisher.test.ts` (3 publishers; crash real de processo), `outbox-sqs.test.ts` |
+| **C7** ROLLBACK/REFUND antes da referência | `pending-reference.test.ts` (HTTP e fila), `wagering-api.test.ts` |
+| **C8** reinício com consistência final | `restart-recovery.test.ts`: SIGKILL e SIGTERM no meio do tráfego, cliente reenviando, prova de unicidade, eventos, pendentes e reconciliação |
+
+## 12. Falhas eliminatórias — como cada uma é evitada
+
+| Falha | Garantia |
+|---|---|
+| `number` para dinheiro | `big.js` estrito; zod rejeita `amount` numérico; `numeric` ↔ string; teste de arquitetura |
+| saldo negativo por race | lock pessimista + `CHECK (balance_amount >= 0)` + CHECKs no ledger; C2 e hot wallet |
+| débito/crédito duplicado | duas chaves únicas + inbox + `UNIQUE(transaction_id, wallet_id)` + reversão única; C1, C4, C5 |
+| idempotência só em memória | tudo em tabelas com constraints; nenhuma estrutura em memória decide |
+| correto só com uma instância | testes com 3 processos; leases/SKIP LOCKED em outbox e worker |
+| evento antes do commit | outbox na mesma transação; publisher só lê linhas confirmadas (testado) |
+| ledger não auditável | append-only por trigger, cadeia contínua, FKs compostas, reconciliação |
+| infra substituída por mocks | Postgres real em todas as suítes de integração; SQS real nas `*-sqs` |

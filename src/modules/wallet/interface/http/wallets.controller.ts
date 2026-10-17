@@ -1,5 +1,6 @@
-import { Body, Controller, Get, Headers, HttpCode, HttpStatus, Inject, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, UseGuards, Get, Headers, HttpCode, HttpStatus, Inject, Param, Post, Query } from '@nestjs/common';
 import { z } from 'zod';
+import { ProviderAuthGuard } from '../../../auth/auth.guard';
 import { resolveCorrelationId } from '../../../../interface/http/correlation';
 import { logContext } from '../../../../shared/application/log-context';
 import { MoneySchema, UuidParam } from '../../../../interface/http/schemas';
@@ -19,6 +20,7 @@ const LedgerQuery = z
   .strict();
 
 @Controller('wallets')
+@UseGuards(ProviderAuthGuard)
 export class WalletsController {
   constructor(
     @Inject(OPEN_WALLET) private readonly openWallet: OpenWalletUseCase,

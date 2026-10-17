@@ -1,15 +1,16 @@
 /**
  * Sobe UMA instância HTTP da aplicação (processo próprio, pool próprio).
- * Usado pelos testes multi-instância: cada processo é uma réplica independente.
+ * INSTANCE_MODULE=workers inclui o worker de PENDING_REFERENCE.
  * Imprime "READY <url>" quando está aceitando conexões.
  */
-import { startHttpApp } from './http-app';
+import { startHttpApp, WalletHttpTestModule, WorkersHttpTestModule } from './http-app';
 
-const app = await startHttpApp(undefined, Number(process.env.PORT ?? 0));
+const module = process.env.INSTANCE_MODULE === 'workers' ? WorkersHttpTestModule : WalletHttpTestModule;
+const app = await startHttpApp(module, Number(process.env.PORT ?? 0));
 console.log(`READY ${app.url}`);
 
 const shutdown = async () => {
-  await app.close();
+  await app.close(); // beforeApplicationShutdown → workers param → ORM fecha
   process.exit(0);
 };
 process.on('SIGTERM', shutdown);

@@ -7,13 +7,13 @@ export interface Instance {
 }
 
 /** Sobe N processos independentes da aplicação e espera todos ficarem prontos. */
-export async function spawnInstances(n: number): Promise<Instance[]> {
-  return Promise.all(Array.from({ length: n }, () => spawnOne()));
+export async function spawnInstances(n: number, env: Record<string, string> = {}): Promise<Instance[]> {
+  return Promise.all(Array.from({ length: n }, () => spawnInstance(env)));
 }
 
-async function spawnOne(): Promise<Instance> {
+export async function spawnInstance(env: Record<string, string> = {}): Promise<Instance> {
   const proc = Bun.spawn(['bun', 'test/helpers/instance-server.ts'], {
-    env: { ...process.env, PORT: '0', DB_POOL_MAX: '10' },
+    env: { ...process.env, PORT: '0', DB_POOL_MAX: '10', ...env },
     stdout: 'pipe',
     stderr: 'inherit',
   });

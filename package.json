@@ -21,6 +21,7 @@
     "test:spike": "bun test test/spike",
     "test:integration": "bun test test/integration",
     "test:concurrency": "bun test test/concurrency",
+    "test:sqs": "bun test test/integration/outbox-sqs.test.ts test/integration/consumer-sqs.test.ts test/spike/sqs-fifo.test.ts",
     "test:all": "bun test"
   },
   "dependencies": {

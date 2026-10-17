@@ -1,3 +1,6 @@
+> **Nota:** este é o plano original (antes da implementação). O estado final, com as decisões
+> efetivamente tomadas, está em [`ARCHITECTURE.md`](../ARCHITECTURE.md).
+
 # Plano de implementação — Distributed Wagering Processor
 
 > Objetivo: maximizar os 85 pontos "duros" (correção, concorrência, idempotência, mensageria, testes) antes de qualquer polimento. Autenticação fica por último (0 pontos).

@@ -1,4 +1,5 @@
-import { Body, Controller, Get, Headers, Inject, Param, Post, Res } from '@nestjs/common';
+import { Body, Controller, UseGuards, Get, Headers, Inject, Param, Post, Res } from '@nestjs/common';
+import { ProviderAuthGuard } from '../../../auth/auth.guard';
 import { resolveCorrelationId } from '../../../../interface/http/correlation';
 import { logContext } from '../../../../shared/application/log-context';
 import type { HttpResponse } from '../../../../interface/http/http-types';
@@ -31,6 +32,7 @@ export function statusFor(result: WagerResult): number {
 }
 
 @Controller()
+@UseGuards(ProviderAuthGuard)
 export class WageringController {
   constructor(
     @Inject(PROCESS_WAGER) private readonly processWager: ProcessWagerTransactionUseCase,
