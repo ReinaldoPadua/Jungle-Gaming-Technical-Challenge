@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { CLOCK, type Clock } from '../../shared/application/clock';
 import { ID_GENERATOR, type IdGenerator } from '../../shared/application/id-generator';
+import { APP_LOGGER, type AppLogger } from '../../shared/application/logger';
 import { METRICS, type Metrics } from '../../shared/application/metrics';
 import { UNIT_OF_WORK, type UnitOfWork } from '../../shared/application/unit-of-work';
 import { ProcessWagerTransactionUseCase } from './application/process-wager-transaction.use-case';
@@ -15,9 +16,9 @@ import { GET_WAGER, PROCESS_WAGER, REFERENCE_RETRY_POLICY } from './wagering.tok
     { provide: REFERENCE_RETRY_POLICY, useValue: DEFAULT_REFERENCE_RETRY_POLICY },
     {
       provide: PROCESS_WAGER,
-      inject: [UNIT_OF_WORK, CLOCK, ID_GENERATOR, METRICS, REFERENCE_RETRY_POLICY],
-      useFactory: (uow: UnitOfWork, clock: Clock, ids: IdGenerator, metrics: Metrics, policy: ReferenceRetryPolicy) =>
-        new ProcessWagerTransactionUseCase(uow, clock, ids, metrics, policy),
+      inject: [UNIT_OF_WORK, CLOCK, ID_GENERATOR, METRICS, REFERENCE_RETRY_POLICY, APP_LOGGER],
+      useFactory: (uow: UnitOfWork, clock: Clock, ids: IdGenerator, metrics: Metrics, policy: ReferenceRetryPolicy, logger: AppLogger) =>
+        new ProcessWagerTransactionUseCase(uow, clock, ids, metrics, policy, logger),
     },
     { provide: GET_WAGER, inject: [UNIT_OF_WORK], useFactory: (uow: UnitOfWork) => new GetWagerTransactionQuery(uow) },
   ],

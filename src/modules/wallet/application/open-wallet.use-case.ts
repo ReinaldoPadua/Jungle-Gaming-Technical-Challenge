@@ -1,4 +1,5 @@
 import type { Clock } from '../../../shared/application/clock';
+import { logContext } from '../../../shared/application/log-context';
 import type { IdGenerator } from '../../../shared/application/id-generator';
 import type { Metrics } from '../../../shared/application/metrics';
 import type { UnitOfWork } from '../../../shared/application/unit-of-work';
@@ -33,6 +34,7 @@ export class OpenWalletUseCase {
     const initialBalance = Money.from(cmd.initialBalance);
     const now = this.clock.now();
     const walletId = this.ids.next();
+    logContext.enrich({ walletId });
     const opening = initialBalance.isPositive()
       ? WagerTransaction.createOpening({ id: this.ids.next(), walletId, playerId: cmd.playerId, money: initialBalance, at: now })
       : undefined;

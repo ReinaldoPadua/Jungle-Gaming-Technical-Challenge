@@ -1,5 +1,6 @@
 import { ApplicationError, TransientError } from '../../../../shared/application/errors';
 import type { Faults } from '../../../../shared/application/faults';
+import { logContext } from '../../../../shared/application/log-context';
 import type { AppLogger } from '../../../../shared/application/logger';
 import type { Metrics } from '../../../../shared/application/metrics';
 import { DomainError } from '../../../../shared/domain/errors';
@@ -105,16 +106,30 @@ export class WagerConsumer {
   async handle(message: QueueMessage): Promise<HandleOutcome> {
     this.metrics.setGauge('consumer_inflight_messages', this.inflight.size);
     const parsed = parseWagerMessage(message.body);
-    if (!parsed.ok) return this.deadLetter(message, parsed.reason, parsed.detail);
+    if (!parsed.ok) {
+      return logContext.run({ messageId: message.brokerMessageId, correlationId: message.brokerMessageId }, () =>
+        this.deadLetter(message, parsed.reason, parsed.detail),
+      );
+    }
+    const { message: envelope } = parsed;
+    return logContext.run(
+      {
+        correlationId: envelope.messageId,
+        messageId: envelope.messageId,
+        walletId: envelope.data.walletId,
+        providerId: envelope.data.providerId,
+      },
+      () => this.handleParsed(message, parsed),
+    );
+  }
 
+  private async handleParsed(
+    message: QueueMessage,
+    parsed: Extract<ReturnType<typeof parseWagerMessage>, { ok: true }>,
+  ): Promise<HandleOutcome> {
     const { message: envelope, contentHash } = parsed;
-    const log = {
-      messageId: envelope.messageId,
-      correlationId: envelope.messageId,
-      providerId: envelope.data.providerId,
-      walletId: envelope.data.walletId,
-      receiveCount: message.receiveCount,
-    };
+    // ids de correlação já estão no contexto de log; aqui só o que é específico da entrega
+    const log = { brokerMessageId: message.brokerMessageId, receiveCount: message.receiveCount };
     const heartbeat = this.startHeartbeat(message);
     try {
       const { result, outcome } = await this.useCase.executeDetailed(
@@ -131,7 +146,7 @@ export class WagerConsumer {
       this.faults.hit('consumer:after-commit-before-ack');
       await this.queue.ack(message);
       this.metrics.increment('consumer_messages_total', { outcome: outcome === 'duplicate_message' ? 'duplicate' : 'acked' });
-      this.logger.info('wager message processed', { ...log, transactionId: result.transactionId, status: result.status, outcome });
+      this.logger.info('wager message acked', { ...log, status: result.status, outcome });
       return 'acked';
     } catch (err) {
       heartbeat.stop();

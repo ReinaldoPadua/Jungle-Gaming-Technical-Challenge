@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Headers, Inject, Param, Post, Res } from '@nestjs/common';
 import { resolveCorrelationId } from '../../../../interface/http/correlation';
+import { logContext } from '../../../../shared/application/log-context';
 import type { HttpResponse } from '../../../../interface/http/http-types';
 import { UuidParam } from '../../../../interface/http/schemas';
 import { ZodValidationPipe } from '../../../../interface/http/zod-validation.pipe';
@@ -43,6 +44,7 @@ export class WageringController {
     @Headers('x-correlation-id') correlationId: string | undefined,
     @Res({ passthrough: true }) res: HttpResponse,
   ): Promise<WagerResult> {
+    logContext.enrich({ providerId: body.providerId, walletId: body.walletId });
     // @Headers não aceita pipes: valida o header explicitamente (400 se ausente/malformado)
     const idempotencyKey = new ZodValidationPipe(IdempotencyKeyHeader).transform(idempotencyKeyHeader);
     const result = await this.processWager.execute({

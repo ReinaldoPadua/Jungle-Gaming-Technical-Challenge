@@ -1,5 +1,6 @@
 import type { Clock } from '../../../shared/application/clock';
 import type { IdGenerator } from '../../../shared/application/id-generator';
+import { logContext } from '../../../shared/application/log-context';
 import type { AppLogger } from '../../../shared/application/logger';
 import type { Metrics } from '../../../shared/application/metrics';
 import type { UnitOfWork } from '../../../shared/application/unit-of-work';
@@ -61,11 +62,16 @@ export class PendingReferenceWorker {
 
   /** Reprocessa UMA pendente. Nunca lança: falhas ficam para o próximo ciclo. */
   async retry(id: string): Promise<RetryResult> {
+    return logContext.run({ transactionId: id, correlationId: `pending-retry:${id}` }, () => this.retryInContext(id));
+  }
+
+  private async retryInContext(id: string): Promise<RetryResult> {
     try {
       const result = await this.uow.run(async (repos): Promise<RetryResult> => {
         const now = this.clock.now();
         const tx = await repos.wagerTransactions.lockDuePendingReference(id, now);
         if (!tx) return 'skipped';
+        logContext.enrich({ walletId: tx.walletId, providerId: tx.providerId });
         const outcome = await this.settlement.settleAndPersist(repos, tx, {
           now,
           correlationId: `pending-retry:${tx.id}`,
@@ -74,9 +80,6 @@ export class PendingReferenceWorker {
         });
         if (outcome.type === 'pending_reference') return 'rescheduled';
         this.logger.info('pending transaction settled', {
-          transactionId: tx.id,
-          walletId: tx.walletId,
-          providerId: tx.providerId,
           status: tx.status,
           failureCode: tx.failureCode,
           attempts: tx.attempts,
@@ -86,7 +89,7 @@ export class PendingReferenceWorker {
       if (result !== 'skipped') this.metrics.increment('pending_reference_retries_total', { result });
       return result;
     } catch (err) {
-      this.logger.error('pending transaction retry failed', { transactionId: id, error: err instanceof Error ? err.message : String(err) });
+      this.logger.error('pending transaction retry failed', { error: err instanceof Error ? err.message : String(err) });
       return 'skipped';
     }
   }

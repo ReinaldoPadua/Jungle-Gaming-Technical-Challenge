@@ -20,6 +20,7 @@ const COUNTERS: Record<CounterName, { help: string; labels: readonly string[] }>
   dlq_messages_total: { help: 'Messages sent to the dead-letter queue, by reason', labels: ['reason'] },
   consumer_retries_total: { help: 'Messages returned to the queue for a transient retry', labels: [] },
   pending_reference_retries_total: { help: 'PENDING_REFERENCE reprocessing attempts, by result', labels: ['result'] },
+  http_requests_total: { help: 'HTTP requests, by method/route/status', labels: ['method', 'route', 'status'] },
 };
 
 const GAUGES: Record<GaugeName, string> = {
@@ -33,6 +34,11 @@ const HISTOGRAMS: Record<HistogramName, { help: string; labels: readonly string[
   wager_processing_duration_seconds: {
     help: 'End-to-end processing latency of a wager transaction (use case)',
     labels: ['kind', 'outcome', 'source'],
+    buckets: [0.002, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5],
+  },
+  http_request_duration_seconds: {
+    help: 'HTTP request latency',
+    labels: ['method', 'route', 'status'],
     buckets: [0.002, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5],
   },
 };

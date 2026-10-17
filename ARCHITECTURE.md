@@ -410,3 +410,51 @@ emitido uma vez); REFUND antes da BET via fila; cadeia ROLLBACK(REFUND(BET)) che
 referência que nunca chega → `REFERENCE_NOT_FOUND`; TTL; backoff crescente; referência inválida
 → código específico; ROLLBACK de WIN gasto → `REVERSAL_WOULD_OVERDRAW`; 3 workers concorrentes
 sobre 30 pendentes (cada uma aplicada uma vez); worker + HTTP concorrentes na mesma wallet.
+
+## 8. Observabilidade (fase 8)
+
+### Logs estruturados
+Uma linha JSON por evento (`JsonLogger`, sem dependência externa):
+```json
+{"level":"info","time":"…","msg":"wager transaction handled","service":"wagering","instanceId":"…",
+ "correlationId":"corr-abc","transactionId":"…","walletId":"…","providerId":"provider-a",
+ "kind":"BET","source":"http","outcome":"processed","status":"PROCESSED","durationMs":12}
+```
+- **Correlação automática** via `AsyncLocalStorage` (`logContext`): o middleware HTTP abre o
+  contexto com o `X-Correlation-Id` recebido (ou gera um UUID v7) e o devolve no header da
+  resposta; o consumidor abre um contexto por mensagem (`correlationId = messageId`); o worker de
+  pendentes, um por transação. Use cases e controllers só **enriquecem** (`transactionId`,
+  `walletId`, `providerId`) — ninguém passa ids de log por parâmetro. Fluxos concorrentes não se
+  misturam (testado).
+- **Sem dados sensíveis**: redação recursiva por nome de chave (`money`, `amount`, `balance*`,
+  `payload`, `body`, `data`, `authorization`, `token`, …) → `[REDACTED]`. O corpo das requisições
+  e mensagens nunca é logado; logs de reconciliação dizem *que* divergiu, não *quanto* (o valor está
+  na resposta). Um teste varre todos os logs de um fluxo completo procurando os valores usados.
+- Logs do próprio Nest também saem em JSON (`warn`/`error`). Nível por `LOG_LEVEL`.
+- Uma linha de acesso por requisição (`http request`: método, rota-padrão, status, duração);
+  `/health/*` e `/metrics` não poluem o log.
+
+### Métricas (`GET /metrics`, Prometheus)
+| Exigência (seção 12) | Métrica |
+|---|---|
+| transações por status | `wager_transactions_total{kind,status,source}` |
+| duplicatas detectadas | `idempotent_replays_total{source}`, `inbox_duplicates_total{consumer}`, `idempotency_conflicts_total{reason}` |
+| retries | `db_transaction_retries_total`, `consumer_retries_total`, `pending_reference_retries_total{result}`, `outbox_publish_failures_total` |
+| mensagens em DLQ | `dlq_messages_total{reason}` |
+| conflitos de lock | `db_lock_conflicts_total{sqlstate}` (55P03 lock_timeout, 40P01 deadlock) |
+| outbox lag | `outbox_lag_seconds`, `outbox_pending_messages` |
+| latência de processamento | `wager_processing_duration_seconds{kind,outcome,source}` (histograma) |
+| extras | `http_requests_total` / `http_request_duration_seconds{method,route,status}`, `consumer_messages_total{outcome}`, `pending_reference_transactions`, `reconciliation_mismatches_total`, métricas padrão do processo |
+
+Rótulos de rota usam o padrão do Express (`/wallets/:walletId`) — nunca ids, para não explodir a
+cardinalidade. Todas as séries carregam `instance_id`.
+
+### Health checks
+`GET /health/live` (processo responde, não toca dependências) e `GET /health/ready` (PostgreSQL
+`SELECT 1` + SQS `GetQueueAttributes`, timeout de 2 s cada; 503 se algum falhar). Sem autenticação.
+
+### Diagnóstico de um conflito de lock (testado)
+Outra transação segura o lock da wallet → `lock_timeout` (55P03) → 2 re-tentativas com backoff →
+503 + `Retry-After: 1`. Ficam registrados: `db_lock_conflicts_total{sqlstate="55P03"} += 3`,
+`db_transaction_retries_total += 2`, dois `warn` "transient database error, retrying transaction" e
+um `error` final com `walletId`/`correlationId`. Nada é gravado; reenviar a mesma requisição funciona.

@@ -25,7 +25,7 @@ export function faultsFromEnv(env: { FAULTS?: string; NODE_ENV?: string }): Faul
   return {
     hit(point) {
       if (!armed.has(point)) return;
-      console.log(JSON.stringify({ level: 'warn', msg: 'fault injected: exiting process', point }));
+      process.stdout.write(`${JSON.stringify({ level: 'warn', time: new Date().toISOString(), msg: 'fault injected: exiting process', point })}\n`);
       // exit imediato: nenhum finally/flush/ack roda — é exatamente um crash
       process.exit(137);
     },

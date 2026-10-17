@@ -34,7 +34,7 @@ export function buildOrmConfig(env: Pick<Env, 'DATABASE_URL' | 'DB_POOL_MAX' | '
     debug: false,
     // silencia o log do migrator durante os testes
     logger: (msg) => {
-      if (env.NODE_ENV !== 'test') console.log(msg);
+      if (env.NODE_ENV !== 'test') process.stdout.write(`${JSON.stringify({ level: 'info', time: new Date().toISOString(), msg: 'mikro-orm', detail: msg })}\n`);
     },
   });
 }

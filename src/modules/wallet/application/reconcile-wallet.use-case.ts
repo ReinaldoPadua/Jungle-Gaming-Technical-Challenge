@@ -66,10 +66,10 @@ export class ReconcileWalletUseCase {
     this.metrics.increment('reconciliations_total', { result: consistent ? 'consistent' : 'mismatch' });
     if (!consistent) {
       this.metrics.increment('reconciliation_mismatches_total');
+      // sem valores no log (política de dados): o relatório completo está na resposta
       this.logger.error('wallet reconciliation mismatch', {
-        correlationId: ctx.correlationId,
         walletId,
-        difference: report.difference.amount,
+        differenceSign: difference.isNegative() ? 'negative' : 'positive',
         chainBreaks: summary.chainBreaks,
         checkedEntries: summary.entries,
         lastEntryMatchesStored,

@@ -14,7 +14,8 @@ import { MikroOutboxStore } from '../../src/modules/messaging/infrastructure/per
 import { SqsEventPublisher } from '../../src/modules/messaging/infrastructure/sqs/sqs-event-publisher';
 import { systemClock } from '../../src/shared/application/clock';
 import { faultsFromEnv } from '../../src/shared/application/faults';
-import { jsonLogger } from '../../src/shared/application/logger';
+import { JsonLogger } from '../../src/infrastructure/observability/json-logger';
+const jsonLogger = new JsonLogger({ level: 'warn', service: 'test-worker' });
 import { noopMetrics } from '../../src/shared/application/metrics';
 import { FilePublisher } from './outbox';
 

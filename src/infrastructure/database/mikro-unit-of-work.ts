@@ -1,6 +1,7 @@
 import { IsolationLevel } from '@mikro-orm/core';
 import type { EntityManager, MikroORM } from '@mikro-orm/postgresql';
 import { TransientError } from '../../shared/application/errors';
+import type { AppLogger } from '../../shared/application/logger';
 import type { Metrics } from '../../shared/application/metrics';
 import type { TransactionalRepositories, UnitOfWork, UnitOfWorkOptions } from '../../shared/application/unit-of-work';
 import { MikroInboxRepository } from '../../modules/messaging/infrastructure/persistence/mikro-inbox.repository';
@@ -26,6 +27,7 @@ export class MikroUnitOfWork implements UnitOfWork {
     private readonly orm: MikroORM,
     private readonly metrics: Metrics,
     private readonly config: UnitOfWorkConfig = DEFAULT_UOW_CONFIG,
+    private readonly logger?: AppLogger,
   ) {}
 
   async run<T>(work: (repos: TransactionalRepositories) => Promise<T>, options: UnitOfWorkOptions = {}): Promise<T> {
@@ -45,11 +47,14 @@ export class MikroUnitOfWork implements UnitOfWork {
         );
       } catch (err) {
         if (classifyDbError(err) !== 'transient') throw err;
-        if (isLockConflict(err)) this.metrics.increment('db_lock_conflicts_total', { sqlstate: sqlStateOf(err) ?? '' });
+        const sqlstate = sqlStateOf(err) ?? 'n/a';
+        if (isLockConflict(err)) this.metrics.increment('db_lock_conflicts_total', { sqlstate });
         if (attempt >= this.config.maxAttempts) {
+          this.logger?.error('database transaction failed after retries', { attempt, sqlstate, error: err });
           throw new TransientError('database temporarily unavailable or contended, retry later', 1, err);
         }
         this.metrics.increment('db_transaction_retries_total');
+        this.logger?.warn('transient database error, retrying transaction', { attempt, sqlstate, error: (err as Error).message });
         await Bun.sleep(jitteredBackoff(attempt));
       }
     }

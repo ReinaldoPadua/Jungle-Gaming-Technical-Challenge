@@ -16,11 +16,12 @@ export type CounterName =
   | 'consumer_messages_total'
   | 'dlq_messages_total'
   | 'consumer_retries_total'
-  | 'pending_reference_retries_total';
+  | 'pending_reference_retries_total'
+  | 'http_requests_total';
 
 export type GaugeName = 'outbox_lag_seconds' | 'outbox_pending_messages' | 'consumer_inflight_messages' | 'pending_reference_transactions';
 
-export type HistogramName = 'wager_processing_duration_seconds';
+export type HistogramName = 'wager_processing_duration_seconds' | 'http_request_duration_seconds';
 
 export interface Metrics {
   increment(name: CounterName, labels?: Record<string, string>, value?: number): void;

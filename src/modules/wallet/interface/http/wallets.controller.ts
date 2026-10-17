@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Headers, HttpCode, HttpStatus, Inject, Param, Post, Query } from '@nestjs/common';
 import { z } from 'zod';
 import { resolveCorrelationId } from '../../../../interface/http/correlation';
+import { logContext } from '../../../../shared/application/log-context';
 import { MoneySchema, UuidParam } from '../../../../interface/http/schemas';
 import { ZodValidationPipe } from '../../../../interface/http/zod-validation.pipe';
 import type { OpenWalletUseCase } from '../../application/open-wallet.use-case';
@@ -54,6 +55,7 @@ export class WalletsController {
     @Param('walletId', new ZodValidationPipe(UuidParam)) walletId: string,
     @Headers('x-correlation-id') correlationId?: string,
   ) {
+    logContext.enrich({ walletId });
     return this.reconcile.execute(walletId, { correlationId: resolveCorrelationId(correlationId) });
   }
 }

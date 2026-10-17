@@ -4,7 +4,7 @@ Serviço financeiro distribuído que processa transações de apostas (BET / WIN
 vindas de múltiplos provedores, via HTTP e SQS, com idempotência persistente, ledger imutável e
 transactional outbox.
 
-> Status: **fases 0–7** (fundação, domínio, schema, API de wallet, processamento de transações, outbox, consumidor SQS, worker de referências pendentes). Veja o plano completo em [`docs/PLAN.md`](docs/PLAN.md).
+> Status: **fases 0–8** (fundação, domínio, schema, API de wallet, processamento de transações, outbox, consumidor SQS, worker de referências pendentes, observabilidade). Veja o plano completo em [`docs/PLAN.md`](docs/PLAN.md).
 > Decisões técnicas serão consolidadas em `ARCHITECTURE.md`.
 
 ## Stack

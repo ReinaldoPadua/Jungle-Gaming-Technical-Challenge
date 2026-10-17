@@ -5,10 +5,11 @@ import { ENV, type Env } from '../config/env';
 import { CLOCK, systemClock } from '../shared/application/clock';
 import { FAULTS, faultsFromEnv } from '../shared/application/faults';
 import { ID_GENERATOR, uuidV7Generator } from '../shared/application/id-generator';
-import { APP_LOGGER, jsonLogger } from '../shared/application/logger';
+import { APP_LOGGER } from '../shared/application/logger';
 import { METRICS } from '../shared/application/metrics';
 import { UNIT_OF_WORK } from '../shared/application/unit-of-work';
 import { DEFAULT_UOW_CONFIG, MikroUnitOfWork } from './database/mikro-unit-of-work';
+import { JsonLogger } from './observability/json-logger';
 import { PromMetrics } from './observability/prom-metrics';
 
 @Controller()
@@ -30,7 +31,11 @@ class MetricsController {
   providers: [
     { provide: CLOCK, useValue: systemClock },
     { provide: ID_GENERATOR, useValue: uuidV7Generator },
-    { provide: APP_LOGGER, useValue: jsonLogger },
+    {
+      provide: APP_LOGGER,
+      inject: [ENV],
+      useFactory: (env: Env) => new JsonLogger({ level: env.LOG_LEVEL, service: 'wagering', instanceId: env.INSTANCE_ID }),
+    },
     { provide: FAULTS, inject: [ENV], useFactory: (env: Env) => faultsFromEnv(env) },
     {
       provide: METRICS,
@@ -39,13 +44,14 @@ class MetricsController {
     },
     {
       provide: UNIT_OF_WORK,
-      inject: [MikroORM, METRICS, ENV],
-      useFactory: (orm: MikroORM, metrics: PromMetrics, env: Env) =>
-        new MikroUnitOfWork(orm, metrics, {
-          ...DEFAULT_UOW_CONFIG,
-          lockTimeoutMs: env.DB_LOCK_TIMEOUT_MS,
-          statementTimeoutMs: env.DB_STATEMENT_TIMEOUT_MS,
-        }),
+      inject: [MikroORM, METRICS, ENV, APP_LOGGER],
+      useFactory: (orm: MikroORM, metrics: PromMetrics, env: Env, logger: JsonLogger) =>
+        new MikroUnitOfWork(
+          orm,
+          metrics,
+          { ...DEFAULT_UOW_CONFIG, lockTimeoutMs: env.DB_LOCK_TIMEOUT_MS, statementTimeoutMs: env.DB_STATEMENT_TIMEOUT_MS },
+          logger,
+        ),
     },
   ],
   exports: [CLOCK, ID_GENERATOR, APP_LOGGER, METRICS, UNIT_OF_WORK, FAULTS],

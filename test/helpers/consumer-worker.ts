@@ -17,7 +17,8 @@ import { consumerConfigFromEnv } from '../../src/modules/wagering/wager-consumer
 import { systemClock } from '../../src/shared/application/clock';
 import { faultsFromEnv } from '../../src/shared/application/faults';
 import { uuidV7Generator } from '../../src/shared/application/id-generator';
-import { jsonLogger } from '../../src/shared/application/logger';
+import { JsonLogger } from '../../src/infrastructure/observability/json-logger';
+const jsonLogger = new JsonLogger({ level: 'warn', service: 'test-worker' });
 import { noopMetrics } from '../../src/shared/application/metrics';
 
 const env = loadEnv();

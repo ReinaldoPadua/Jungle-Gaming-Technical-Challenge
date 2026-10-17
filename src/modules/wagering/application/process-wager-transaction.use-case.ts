@@ -1,4 +1,6 @@
 import type { Clock } from '../../../shared/application/clock';
+import { logContext } from '../../../shared/application/log-context';
+import type { AppLogger } from '../../../shared/application/logger';
 import type { IdGenerator } from '../../../shared/application/id-generator';
 import type { Metrics } from '../../../shared/application/metrics';
 import type { TransactionalRepositories, UnitOfWork } from '../../../shared/application/unit-of-work';
@@ -65,6 +67,7 @@ export class ProcessWagerTransactionUseCase {
     private readonly ids: IdGenerator,
     private readonly metrics: Metrics,
     retryPolicy: ReferenceRetryPolicy,
+    private readonly logger?: AppLogger,
   ) {
     this.settlement = new SettlementService(ids, metrics, retryPolicy);
   }
@@ -85,6 +88,7 @@ export class ProcessWagerTransactionUseCase {
     const money = Money.from(cmd.money);
     const payloadHash = computePayloadHash({ ...cmd, money });
     const transactionId = this.ids.next();
+    logContext.enrich({ transactionId, walletId: cmd.walletId, providerId: cmd.providerId });
 
     const { result, outcome } = await this.uow.run(async (repos) => {
       // 0. inbox (somente entrada por fila)
@@ -112,6 +116,18 @@ export class ProcessWagerTransactionUseCase {
         await repos.inbox.markProcessed(inbox);
       }
       return processed;
+    });
+
+    // replay: o transactionId relevante é o da transação original
+    logContext.enrich({ transactionId: result.transactionId });
+    this.logger?.info('wager transaction handled', {
+      kind: cmd.kind,
+      source: cmd.source,
+      outcome,
+      status: result.status,
+      failureCode: result.failureCode,
+      idempotentReplay: result.idempotentReplay,
+      durationMs: Math.round(performance.now() - startedAt),
     });
 
     if (outcome === 'replay' || outcome === 'duplicate_message') {
