@@ -2,7 +2,6 @@ import { MikroORM } from '@mikro-orm/postgresql';
 import { Controller, Get, Global, Header, Inject, Module, Res } from '@nestjs/common';
 import type { HttpResponse as Response } from '../interface/http/http-types';
 import { ENV, type Env } from '../config/env';
-import { AuthModule } from '../modules/auth/auth.module';
 import { CLOCK, systemClock } from '../shared/application/clock';
 import { FAULTS, faultsFromEnv } from '../shared/application/faults';
 import { ID_GENERATOR, uuidV7Generator } from '../shared/application/id-generator';
@@ -28,7 +27,6 @@ class MetricsController {
 /** Implementações das portas compartilhadas da camada de aplicação. */
 @Global()
 @Module({
-  imports: [AuthModule],
   controllers: [MetricsController],
   providers: [
     { provide: CLOCK, useValue: systemClock },
@@ -56,6 +54,6 @@ class MetricsController {
         ),
     },
   ],
-  exports: [CLOCK, ID_GENERATOR, APP_LOGGER, METRICS, UNIT_OF_WORK, FAULTS, AuthModule],
+  exports: [CLOCK, ID_GENERATOR, APP_LOGGER, METRICS, UNIT_OF_WORK, FAULTS],
 })
 export class CoreModule {}

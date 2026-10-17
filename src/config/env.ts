@@ -43,8 +43,13 @@ const EnvSchema = z.object({
   PENDING_WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(4),
   PENDING_WORKER_POLL_INTERVAL_MS: z.coerce.number().int().min(10).default(500),
 
-  /** `none`: sem autenticação (decisão do desafio). `oidc` é o ponto de extensão documentado. */
+  /** `none`: sem autenticação. `oidc`: bearer token de um IdP externo (Keycloak), ver ARCHITECTURE.md §9. */
   AUTH_MODE: z.enum(['none', 'oidc']).default('none'),
+  OIDC_ISSUER: z.string().url().optional(),
+  OIDC_AUDIENCE: z.string().min(1).default('wagering-api'),
+  /** default: <issuer>/protocol/openid-connect/certs (útil quando o issuer público difere do host interno) */
+  OIDC_JWKS_URI: z.string().url().optional(),
+  OIDC_PROVIDER_CLAIM: z.string().min(1).default('provider_id'),
 
   /** injeção de falhas para testes de recuperação (ver shared/application/faults.ts) */
   FAULTS: z.string().optional(),

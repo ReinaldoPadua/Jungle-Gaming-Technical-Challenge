@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from './config/config.module';
 import { HealthModule } from './health/health.module';
 import { CoreModule } from './infrastructure/core.module';
+import { AuthModule } from './modules/auth/auth.module';
 import { DatabaseModule } from './infrastructure/database/database.module';
 import { MessagingModule } from './infrastructure/messaging/messaging.module';
 import { OutboxModule } from './modules/messaging/outbox.module';
@@ -11,6 +12,6 @@ import { WageringModule } from './modules/wagering/wagering.module';
 import { WalletModule } from './modules/wallet/wallet.module';
 
 @Module({
-  imports: [ConfigModule, DatabaseModule, CoreModule, MessagingModule, HealthModule, WalletModule, WageringModule, OutboxModule, WagerConsumerModule, PendingReferenceModule],
+  imports: [ConfigModule, DatabaseModule, CoreModule, AuthModule, MessagingModule, HealthModule, WalletModule, WageringModule, OutboxModule, WagerConsumerModule, PendingReferenceModule],
 })
 export class AppModule {}

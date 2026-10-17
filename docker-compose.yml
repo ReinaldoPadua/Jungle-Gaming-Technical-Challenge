@@ -13,6 +13,11 @@ x-app-env: &app-env
   WAGER_QUEUE_NAME: wager-transactions.fifo
   WAGER_DLQ_NAME: wager-transactions-dlq.fifo
   EVENTS_QUEUE_NAME: wallet-events.fifo
+  # autenticação: `AUTH_MODE=oidc docker compose --profile auth --profile app up`
+  AUTH_MODE: ${AUTH_MODE:-none}
+  OIDC_ISSUER: http://localhost:8080/realms/wagering
+  OIDC_JWKS_URI: http://keycloak:8080/realms/wagering/protocol/openid-connect/certs
+  OIDC_AUDIENCE: wagering-api
 
 services:
   postgres:
@@ -51,6 +56,27 @@ services:
       interval: 2s
       timeout: 3s
       retries: 60
+
+  keycloak:
+    # IdP externo (OIDC). Provedores = clients confidenciais com client-credentials;
+    # o token traz `provider_id` e audience `wagering-api` (docker/keycloak/wagering-realm.json).
+    image: quay.io/keycloak/keycloak:26.0
+    profiles: ["auth"]
+    command: ["start-dev", "--import-realm", "--health-enabled=true"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      # issuer estável (localhost:8080) para tokens obtidos de dentro ou de fora do compose
+      KC_HOSTNAME: http://localhost:8080
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+    ports: ["8080:8080"]
+    volumes:
+      - ./docker/keycloak:/opt/keycloak/data/import:ro
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q UP <&3"]
+      interval: 5s
+      timeout: 3s
+      retries: 40
 
   migrate:
     build: .

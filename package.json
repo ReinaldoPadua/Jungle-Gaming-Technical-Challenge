@@ -22,6 +22,8 @@
     "test:integration": "bun test test/integration",
     "test:concurrency": "bun test test/concurrency",
     "test:sqs": "bun test test/integration/outbox-sqs.test.ts test/integration/consumer-sqs.test.ts test/spike/sqs-fifo.test.ts",
+    "test:auth": "bun test test/integration/auth-oidc.test.ts test/integration/auth-keycloak.test.ts",
+    "auth:up": "docker compose --profile auth up -d --wait keycloak",
     "test:all": "bun test"
   },
   "dependencies": {
@@ -34,6 +36,7 @@
     "@nestjs/core": "^11.1.0",
     "@nestjs/platform-express": "^11.1.0",
     "big.js": "^7.0.1",
+    "jose": "^5.9.6",
     "prom-client": "^15.1.3",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
